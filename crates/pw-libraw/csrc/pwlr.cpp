@@ -725,7 +725,9 @@ struct pwlr_means {
 } /* extern "C" */
 
 /* Walk complete cells once. Keep each cell's sums separate until its clipping and shadow
- * tests have seen every photosite, including both greens on a Bayer sensor. */
+ * tests have seen every photosite, including both greens on a Bayer sensor. In a mosaic,
+ * the photosite's colour comes from its CFA row and the cell's CFA column plus its offset
+ * within the cell. The CFA width is a multiple of the cell width. */
 template <bool Mosaic>
 static void pwlr_channel_means_of(const libraw_rawdata_t &R, const PwLayout &L,
                                   unsigned x, unsigned y, unsigned right, unsigned bottom,
@@ -749,15 +751,22 @@ static void pwlr_channel_means_of(const libraw_rawdata_t &R, const PwLayout &L,
       if (Mosaic) colours[dy] = L.cfa[row % L.frows];
       pattern[dy] = L.pattern ? &L.rest[(row % L.prows) * L.pcols] : nullptr;
     }
+    unsigned cfa_col = Mosaic ? first_x % L.fcols : 0;
     for (unsigned cx = first_x; cx + cell <= right; cx += cell) {
+      const unsigned black_col = L.pattern ? cx % L.pcols : 0;
       unsigned counts[3] = {}, sums[3] = {};
       bool clipped = false, bright = false;
       for (unsigned dy = 0; dy < cell; dy++) {
-        for (unsigned col = cx; col < cx + cell; col++) {
-          const unsigned extra = pattern[dy] ? pattern[dy][col % L.pcols] : 0;
-          const ushort *pixel = rows[dy] + (size_t)col * stride;
+        unsigned pattern_col = black_col;
+        const ushort *pixel = rows[dy] + (size_t)cx * stride;
+        for (unsigned dx = 0; dx < cell; dx++, pixel += stride) {
+          unsigned extra = 0;
+          if (pattern[dy]) {
+            extra = pattern[dy][pattern_col];
+            if (++pattern_col == L.pcols) pattern_col = 0;
+          }
           for (unsigned c = 0; c < (Mosaic ? 1u : 3u); c++) {
-            const unsigned c4 = Mosaic ? colours[dy][col % L.fcols] : c;
+            const unsigned c4 = Mosaic ? colours[dy][cfa_col + dx] : c;
             const unsigned ch = c4 == 3 ? 1 : c4;
             const PwLimits &limit = L.lim[c4];
             const unsigned black = limit.black + extra;
@@ -769,6 +778,10 @@ static void pwlr_channel_means_of(const libraw_rawdata_t &R, const PwLayout &L,
             sums[ch] += above;
           }
         }
+      }
+      if (Mosaic) {
+        cfa_col += cell;
+        if (cfa_col == L.fcols) cfa_col = 0;
       }
       for (unsigned c = 0; c < 3; c++) out->total[c] += counts[c];
       if (!clipped && bright) {

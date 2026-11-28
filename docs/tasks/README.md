@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T354](T354-faster-channel-means.md) | ADR 0027 W6: the RAW channel means made faster (pw-libraw) | Open | Opus |
-| [T349](T349-white-balance-in-the-render-path.md) | ADR 0027 W6: the white balance in the view core's render path (pw-viewcore) | Blocked | Opus |
+| [T349](T349-white-balance-in-the-render-path.md) | ADR 0027 W6: the white balance in the view core's render path (pw-viewcore) | Open | Opus |
 | [T350](T350-white-balance-in-the-state.md) | ADR 0027 W6: the white balance's mode in the view core's state (pw-viewcore) | Blocked | Opus |
 | [T351](T351-white-balance-keys-menu-marks.md) | ADR 0027 W6: the key, the menu and the mark of the white balance (pw-loupe) | Blocked | Opus |
 | [T352](T352-click-on-gray-in-the-state.md) | ADR 0027 W6: the click on gray in the view core's state (pw-viewcore) | Blocked | Opus |

@@ -706,6 +706,10 @@ avoids the first for X-Trans by refusing a box under 512 px before LibRaw is cal
   LibRaw's `cam_xyz`; if that came from a ColorMatrix for another illuminant (for example
   illuminant A), the balance would not be daylight. The owner's Ricoh GR III DNGs use this way;
   the tests only print DNGs. A task if a DNG's "Daylight (LibRaw)" is seen to look wrong.
+- *The channel means' colour counter* (T354's independent review, 2026-11-28): it steps by a
+  cell and starts again at the pattern's width, so it assumes that width is a multiple of the
+  cell, which `pwlr_layout_of` gives for every layout it accepts (Bayer 2 and 2, X-Trans 6 and
+  3). Taken up if `pwlr_layout_of` ever accepts another pattern.
 - *The cost of an X-Trans region:* the shim's box reaches up to 1487 px plus the region plus
   64 px on each axis, about 0.26–0.45 s for a 1024 px tile on `_DSF4243.RAF` against 1.55 s for
   the whole image (T197's measurements). It matters only if the loupe ever renders many small

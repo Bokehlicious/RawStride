@@ -1,4 +1,4 @@
-# T349. ADR 0027 W6: the white balance in the view core's render path — Blocked
+# T349. ADR 0027 W6: the white balance in the view core's render path — Open
 
 - **Why:** ADR 0027 §3.5 and W6-Q1–W6-Q4 (answered by the owner 2026-11-28, ADR 0027 §4.6). T348
   made `pw-libraw` render with a white balance and give the means under a RAW area, the file's
@@ -178,3 +178,4 @@
 | 2026-11-28 | Blocked | Added; waits for T348, the cold read and the chain review |
 | 2026-11-28 | Blocked | Cold read and chain review: `from_multipliers` checks the ratio on the rounded values; the `grey_area` rule worked out (nearest even origin, moved inside, the numbers at scale 8 and at the corners); `WbInfo.measurable` and the preset list as an `Arc`; the `JobView` literals in `core.rs`'s tests and the four calls in `native_files.rs`; the baseline of the native test; the line numbers |
 | 2026-11-28 | Blocked | T348 done; T354 (the means made faster, owner 2026-11-28, W6-Q7) now comes before this task: waits for T354 |
+| 2026-11-28 | Open | T354 done; set to Open by the reviewer (the cold read and the chain review are above) |

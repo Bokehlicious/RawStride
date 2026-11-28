@@ -355,3 +355,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T346](T346-channel-view-in-the-core.md) | ADR 0027 W4: the channel view's function, its timing and the channel in the view core (pw-viewcore) |
 | [T347](T347-channel-view-keys-menu-mark.md) | ADR 0027 W4: the keys, the menu and the mark of the channel view (pw-loupe) |
 | [T348](T348-libraw-white-balance-per-render.md) | ADR 0027 W6: the white balance per LibRaw render, the means under a RAW area and the file's presets (pw-libraw) |
+| [T354](T354-faster-channel-means.md) | ADR 0027 W6: the RAW channel means made faster (pw-libraw) |

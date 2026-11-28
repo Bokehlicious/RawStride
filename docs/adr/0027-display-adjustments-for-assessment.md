@@ -834,7 +834,9 @@ task of their own, **T354**, before T349. The independent review found the cost 
 (a remainder by the colour pattern's width for every photosite, which the statistics avoid with a
 running counter); T354 changes only how fast the means are made, not what they give. A step to an image
 that was not prefetched, with auto white balance on, then waits for the means before its first
-view, as W6-Q7 proposed.
+view, as W6-Q7 proposed. **After T354 (2026-11-28, same machine and runs):** the means take 173–175 ms
+on the A7R IV's ARW, 211–213 ms on the A1's and 72–77 ms on the RAF (about the statistics' time), and
+the step with auto white balance 654–667, 806–815 and 510–519 ms, with the same results as T348's.
 
 ## 5. Steps
 
