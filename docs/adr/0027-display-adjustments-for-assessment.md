@@ -818,6 +818,24 @@ on the owner's files: the daylight multipliers exist (from `pre_mul` or the matr
 file's "Daylight" preset where it has one, a guard against a wrong value only, not a measure of
 the D55–D65 difference. The 15 % of the cold read is dropped.
 
+**T348's timings for W6-Q1, W6-Q4 and W6-Q7 (2026-11-28, i7-9700K, Windows build 26300, median
+of 5, `--release`):** the means of the whole image take 269–275 ms on the A7R IV's ARW
+(8660×5784), 328–332 ms on the A1's (9568×6376) and 128–131 ms on the X-T30's RAF, against the
+statistics' 169–180, 205–215 and 85–89 ms. A step to an image that was not prefetched, with auto
+white balance on (open, means and a balanced half-size render), takes 717–738, 881–889 and
+540–565 ms; with auto exposure on as well, 890–908, 1093–1104 and 636–660 ms. **The means cannot
+share the statistics' pass** (W6-Q1): the statistics bin each photosite and the means judge whole
+cells, so they are two passes. A balanced half-size render costs about 15–20 % more than one as
+shot (+35–60 ms); a balanced whole-image PPG render no more than one as shot. The presets and the
+daylight read at the open take 9–26 µs (W6-Q4: negligible, so they stay read at the open).
+
+**W6-Q7 after T348 (owner, 2026-11-28):** T348 approved as it is; the means are made faster in a
+task of their own, **T354**, before T349. The independent review found the cost in the inner loop
+(a remainder by the colour pattern's width for every photosite, which the statistics avoid with a
+running counter); T354 changes only how fast the means are made, not what they give. A step to an image
+that was not prefetched, with auto white balance on, then waits for the means before its first
+view, as W6-Q7 proposed.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,

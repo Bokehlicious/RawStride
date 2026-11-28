@@ -698,10 +698,14 @@ avoids the first for X-Trans by refusing a box under 512 px before LibRaw is cal
   half the bytes (1.7 M and 3.1 M of 19.5 M in two runs); a whole-image PPG render of the same
   file and every ARW render are identical. `tests/stop.rs` compares only the size there. A task if
   it is seen in use (for example a flicker when the same RAF is shown again at fit).
-- *Panic paths in `pw-libraw/src/lib.rs` from before T197* (AGENTS.md §3): `r.x + r.w` and
-  `r.x + r.w + margin` in `render_region_with` can overflow `u32` (a panic in a debug build; in
-  release the shim's bounds check and the box check refuse the result), and `Rgb8::crop` is a
-  public function with an `assert!`.
+- *A panic path in `pw-libraw/src/lib.rs` from before T197* (AGENTS.md §3): `Rgb8::crop` is a
+  public function with an `assert!`. (The `u32` overflow of `r.x + r.w` and of the margin in the
+  region renders was removed by T348, 2026-11-28: the check saturates.)
+- *A DNG's daylight from the matrix* (T348's independent review, 2026-11-28): when a DNG has no
+  `pre_mul` equal to the D65 matrix's multipliers, "Daylight (LibRaw)" is worked out from
+  LibRaw's `cam_xyz`; if that came from a ColorMatrix for another illuminant (for example
+  illuminant A), the balance would not be daylight. The owner's Ricoh GR III DNGs use this way;
+  the tests only print DNGs. A task if a DNG's "Daylight (LibRaw)" is seen to look wrong.
 - *The cost of an X-Trans region:* the shim's box reaches up to 1487 px plus the region plus
   64 px on each axis, about 0.26–0.45 s for a 1024 px tile on `_DSF4243.RAF` against 1.55 s for
   the whole image (T197's measurements). It matters only if the loupe ever renders many small

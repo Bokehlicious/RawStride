@@ -2,16 +2,15 @@
 //!
 //! - One [`Session`] = one opened and unpacked RAW file. Unpacking (~0.3 s for a 61 MP Sony) is
 //!   done once; any number of regions can then be rendered from it.
-//! - Every render uses the same fixed settings (camera white balance, no auto brightness, no
+//! - Every render uses the same fixed settings (no auto brightness, no
 //!   white-level adjustment from the image data, sensor orientation, 8-bit sRGB). With them a
 //!   region is **pixel-identical** to the same area of a whole-image render, so tiles cannot show
 //!   seams or differ in colour (measured: docs/analyses/2026-11-04-m2-libraw-decode.md; checked
 //!   again by `tests/regions.rs`).
-//! - The one setting passed per render is the temporary exposure ([`Exposure`], ADR 0027 §3.4),
-//!   applied by LibRaw before the demosaic ([`Session::render_half_exposed`],
-//!   [`Session::render_region_exposed`]). Every render sets it, so nothing of it stays in the
-//!   session, and the region identity holds with it too (`tests/exposure.rs`). The camera's own
-//!   brightness is read once at the open ([`Session::camera_exposure`]).
+//! - Exposure and white balance are passed per render ([`Adjust`], ADR 0027 §§3.4–3.5) and applied
+//!   by LibRaw before the demosaic ([`Session::render_half_adjusted`],
+//!   [`Session::render_region_adjusted`]). Every render sets both, so nothing carries over to the
+//!   next render. The camera's own brightness and balance are read once at the open.
 //! - The demosaic method is chosen per render ([`Demosaic`]): **AHD** is the default and what
 //!   [`Session::render_full`] and [`Session::render_region`] use (ADR 0006);
 //!   **PPG** is the decided method for the egui loupe (ADR 0008 §11, ADR 0009) and is used through
@@ -55,7 +54,25 @@ struct Info {
     damaged: c_int,
     camera_ev: f32,
     camera_ev_from: c_int,
+    cam_mul: [f32; 4],
+    pre_mul: [f32; 4],
+    matrix_mul: [f32; 4],
+    daylight_from: c_int,
+    measurable: c_int,
+    preset_count: c_int,
+    other_ids: [u8; 16],
+    other_count: c_int,
+    presets_ns: i64,
     error: [c_char; 200],
+}
+
+const MAX_PRESETS: usize = 96;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ShimPreset {
+    name: [c_char; 24],
+    mul: [f32; 4],
 }
 
 /// Where a file's own brightness ([`CameraExposure`]) comes from.
@@ -119,6 +136,93 @@ impl Exposure {
     fn shift(self) -> f32 {
         self.ev.exp2()
     }
+}
+
+/// The white balance of one render (ADR 0027 §3.5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WhiteBalance {
+    AsShot,
+    Multipliers(Multipliers),
+}
+
+/// Finite, positive R, G and B gains with a maximum ratio of 64.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Multipliers([f32; 3]);
+
+impl Multipliers {
+    pub fn new(r: f32, g: f32, b: f32) -> Option<Self> {
+        let rgb = [r, g, b];
+        let low = r.min(g).min(b);
+        let high = r.max(g).max(b);
+        (rgb.into_iter().all(|v| v.is_finite() && v > 0.0)
+            && f64::from(high) <= 64.0 * f64::from(low))
+        .then_some(Self(rgb))
+    }
+
+    pub fn get(self) -> [f32; 3] {
+        self.0
+    }
+
+    fn from_shim([r, g, b, _]: [f32; 4]) -> Option<Self> {
+        Self::new(r, g, b)
+    }
+}
+
+/// The temporary exposure and white balance of one render.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Adjust {
+    pub exposure: Exposure,
+    pub white_balance: WhiteBalance,
+}
+
+impl Adjust {
+    pub const NONE: Self = Self {
+        exposure: Exposure::NONE,
+        white_balance: WhiteBalance::AsShot,
+    };
+}
+
+/// Black-subtracted RAW means and photosite counts in R, G, B order. Both mosaic greens count as
+/// G. `used` counts the photosites of cells without clipping and with light above deep shadow.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChannelMeans {
+    pub mean: [f64; 3],
+    pub used: [u64; 3],
+    pub total: [u64; 3],
+}
+
+impl ChannelMeans {
+    /// A balance with G = 1 when at least half the photosites of each colour are usable and each
+    /// mean is positive. Returns `None` if the resulting gains are outside the supported range.
+    pub fn multipliers(&self) -> Option<Multipliers> {
+        for ((used, total), mean) in self.used.into_iter().zip(self.total).zip(self.mean) {
+            if total == 0 || used < total.div_ceil(2) || !mean.is_finite() || mean <= 0.0 {
+                return None;
+            }
+        }
+        let [r, g, b] = self.mean;
+        Multipliers::new((g / r) as f32, 1.0, (g / b) as f32)
+    }
+}
+
+/// A named balance from the file's white balance tables.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preset {
+    pub name: String,
+    pub multipliers: Multipliers,
+}
+
+/// White balance values and preset-reading time at open, for tests and logs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WbDiagnostics {
+    pub cam_mul: [f32; 4],
+    pub pre_mul: [f32; 4],
+    pub matrix_mul: [f32; 4],
+    /// 0 for none, 1 for `pre_mul`, 2 for the matrix.
+    pub daylight_from: u8,
+    pub other_ids: Vec<u8>,
+    pub presets_ns: u64,
 }
 
 /// What LibRaw reported while unpacking a file (see `csrc/pwlr.cpp`).
@@ -300,11 +404,13 @@ unsafe extern "C" {
     fn pwlr_version() -> *const c_char;
     fn pwlr_capabilities() -> c_uint;
     fn pwlr_open(path: *const u16, info: *mut Info) -> *mut c_void;
+    fn pwlr_presets(session: *mut c_void, out: *mut ShimPreset, max: c_int) -> c_int;
     fn pwlr_render(
         session: *mut c_void,
         quality: c_int,
         half: c_int,
         exp_shift: f32,
+        user_mul: *const f32,
         x: c_int,
         y: c_int,
         w: c_int,
@@ -327,6 +433,15 @@ unsafe extern "C" {
     );
     fn pwlr_free(img: *mut c_void);
     fn pwlr_statistics(session: *mut c_void, out: *mut Stats, error: *mut c_char) -> c_int;
+    fn pwlr_channel_means(
+        session: *mut c_void,
+        x: c_uint,
+        y: c_uint,
+        w: c_uint,
+        h: c_uint,
+        out: *mut ChannelMeans,
+        error: *mut c_char,
+    ) -> c_int;
     fn pwlr_clipping_map(
         session: *mut c_void,
         map: *mut u8,
@@ -466,6 +581,11 @@ pub struct Session {
     flip: u8,
     diagnostics: Diagnostics,
     camera: Option<CameraExposure>,
+    camera_multipliers: Option<Multipliers>,
+    daylight: Option<Multipliers>,
+    measurable: bool,
+    presets: Vec<Preset>,
+    wb_diagnostics: WbDiagnostics,
 }
 
 // SAFETY: LibRaw's thread-safe build (`raw_r`) keeps all state in the instance; a Session is
@@ -505,6 +625,15 @@ impl Session {
             damaged: 0,
             camera_ev: 0.0,
             camera_ev_from: 0,
+            cam_mul: [0.0; 4],
+            pre_mul: [0.0; 4],
+            matrix_mul: [0.0; 4],
+            daylight_from: 0,
+            measurable: 0,
+            preset_count: 0,
+            other_ids: [0; 16],
+            other_count: 0,
+            presets_ns: 0,
             error: [0; 200],
         };
         // SAFETY: NUL-terminated UTF-16 path and a valid out-pointer.
@@ -521,6 +650,20 @@ impl Session {
             let e = Error(format!("{}: {}", path.display(), c_text(&info.error)));
             return (Err(e), diagnostics);
         }
+        let mut rows = [ShimPreset::default(); MAX_PRESETS];
+        let max = info.preset_count.clamp(0, MAX_PRESETS as c_int);
+        // SAFETY: `ptr` is a newly opened session and `rows` has room for at least `max` presets.
+        let count = unsafe { pwlr_presets(ptr, rows.as_mut_ptr(), max) }.clamp(0, max);
+        let presets = rows
+            .into_iter()
+            .take(count as usize)
+            .filter_map(|row| {
+                Some(Preset {
+                    multipliers: Multipliers::from_shim(row.mul)?,
+                    name: c_text(&row.name),
+                })
+            })
+            .collect();
         let s = Session {
             ptr,
             width: info.width.max(0) as u32,
@@ -528,6 +671,26 @@ impl Session {
             flip: info.flip.clamp(0, 7) as u8,
             diagnostics,
             camera: CameraExposure::from_shim(info.camera_ev, info.camera_ev_from),
+            camera_multipliers: Multipliers::from_shim(info.cam_mul),
+            daylight: match info.daylight_from {
+                1 => Multipliers::from_shim(info.pre_mul),
+                2 => Multipliers::from_shim(info.matrix_mul),
+                _ => None,
+            },
+            measurable: info.measurable != 0,
+            presets,
+            wb_diagnostics: WbDiagnostics {
+                cam_mul: info.cam_mul,
+                pre_mul: info.pre_mul,
+                matrix_mul: info.matrix_mul,
+                daylight_from: info.daylight_from.clamp(0, 2) as u8,
+                other_ids: info
+                    .other_ids
+                    .into_iter()
+                    .take(info.other_count.max(0) as usize)
+                    .collect(),
+                presets_ns: info.presets_ns.max(0) as u64,
+            },
         };
         (Ok(s), diagnostics)
     }
@@ -542,6 +705,31 @@ impl Session {
     /// for any other file. Given as the file has it, not limited to [`Exposure`]'s range.
     pub fn camera_exposure(&self) -> Option<CameraExposure> {
         self.camera
+    }
+
+    /// The camera's as-shot multipliers, read at open.
+    pub fn camera_multipliers(&self) -> Option<Multipliers> {
+        self.camera_multipliers
+    }
+
+    /// LibRaw's daylight multipliers, when available, read at open.
+    pub fn daylight(&self) -> Option<Multipliers> {
+        self.daylight
+    }
+
+    /// The file's named white balance presets, read at open.
+    pub fn white_balance_presets(&self) -> &[Preset] {
+        &self.presets
+    }
+
+    /// The white balance values and timing captured at open, for tests and logs.
+    pub fn white_balance_diagnostics(&self) -> WbDiagnostics {
+        self.wb_diagnostics.clone()
+    }
+
+    /// Whether the file has a RAW layout supported by [`channel_means`](Self::channel_means).
+    pub fn can_measure(&self) -> bool {
+        self.measurable
     }
 
     /// Visible image width in sensor orientation.
@@ -584,6 +772,26 @@ impl Session {
                 shadow_pixels: stats.shadow_pixels,
                 deep_shadows: stats.deep_shadows,
             })),
+            0 => Ok(None),
+            _ => Err(Error(c_text(&err))),
+        }
+    }
+
+    /// The RAW means of complete cells inside `r`, in visible sensor coordinates. Returns
+    /// `Ok(None)` for the same layouts as [`statistics`](Self::statistics), and `Err` for an
+    /// empty or out-of-bounds rectangle or a spent session.
+    pub fn channel_means(&mut self, r: Rect) -> Result<Option<ChannelMeans>> {
+        let mut out = ChannelMeans {
+            mean: [0.0; 3],
+            used: [0; 3],
+            total: [0; 3],
+        };
+        let mut err = [0 as c_char; 200];
+        // SAFETY: live exclusive session and valid output and error buffers.
+        let rc =
+            unsafe { pwlr_channel_means(self.ptr, r.x, r.y, r.w, r.h, &mut out, err.as_mut_ptr()) };
+        match rc {
+            1 => Ok(Some(out)),
             0 => Ok(None),
             _ => Err(Error(c_text(&err))),
         }
@@ -660,20 +868,30 @@ impl Session {
     /// Renders the whole image (`r` is `None`) or the region `r`, and returns the image with the
     /// box of the visible image the shim processed: all 0 for the whole image, `r` for a region
     /// of a Bayer file, and for a region of an X-Trans file a wider box that holds `r` (its origin
-    /// on a multiple of 1488 px, at least 512 px; `csrc/pwlr.cpp`). `exposure` is this render's
-    /// alone: the shim sets it for every render.
+    /// on a multiple of 1488 px, at least 512 px; `csrc/pwlr.cpp`). The shim sets `adjust` for
+    /// every render.
     fn render(
         &mut self,
         half: bool,
         r: Option<Rect>,
         demosaic: Demosaic,
-        exposure: Exposure,
+        adjust: Adjust,
         stop: Option<&(dyn Fn() -> bool + Sync)>,
     ) -> Result<(Rgb8, Rect)> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
         let mut err = [0 as c_char; 200];
         let (mut ox, mut oy, mut ow, mut oh): (c_int, c_int, c_int, c_int) = (0, 0, 0, 0);
         let stop_ref = stop;
+        let user_mul = match adjust.white_balance {
+            WhiteBalance::AsShot => None,
+            WhiteBalance::Multipliers(mul) => {
+                let [r, g, b] = mul.get();
+                Some([r, g, b, g])
+            }
+        };
+        let mul_ptr = user_mul
+            .as_ref()
+            .map_or(std::ptr::null(), |mul| mul.as_ptr());
         let (check, ctx): (Option<StopFn>, *mut c_void) = match &stop_ref {
             Some(reference) => (
                 Some(stop_trampoline),
@@ -683,13 +901,14 @@ impl Session {
         };
         // SAFETY: live session (exclusive &mut), valid out-pointers and error buffer; `ctx` points
         // at `stop_ref`, which outlives the call, and the shim keeps neither it nor `check`
-        // beyond it.
+        // beyond it. `mul_ptr` is null or points to four floats that outlive the call.
         let img = unsafe {
             pwlr_render(
                 self.ptr,
                 demosaic.user_qual(),
                 c_int::from(half),
-                exposure.shift(),
+                adjust.exposure.shift(),
+                mul_ptr,
                 r.x as c_int,
                 r.y as c_int,
                 r.w as c_int,
@@ -739,13 +958,13 @@ impl Session {
 
     /// The whole image at full resolution, with the given demosaic method.
     pub fn render_full_with(&mut self, demosaic: Demosaic) -> Result<Rgb8> {
-        self.render(false, None, demosaic, Exposure::NONE, None)
+        self.render(false, None, demosaic, Adjust::NONE, None)
             .map(|(image, _)| image)
     }
 
     /// The whole image at half resolution (2×2 binning, no demosaicing).
     pub fn render_half(&mut self) -> Result<Rgb8> {
-        self.render(true, None, Demosaic::Ahd, Exposure::NONE, None)
+        self.render(true, None, Demosaic::Ahd, Adjust::NONE, None)
             .map(|(image, _)| image)
     }
 
@@ -769,13 +988,30 @@ impl Session {
         exposure: Exposure,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Rgb8> {
-        self.render(true, None, Demosaic::Ahd, exposure, Some(stop))
+        self.render_half_adjusted(
+            Adjust {
+                exposure,
+                ..Adjust::NONE
+            },
+            stop,
+        )
+    }
+
+    /// Like [`render_half_stoppable`](Self::render_half_stoppable), with the same stop and its
+    /// cost. LibRaw applies the exposure and white balance for this render before binning.
+    pub fn render_half_adjusted(
+        &mut self,
+        adjust: Adjust,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Rgb8> {
+        self.render(true, None, Demosaic::Ahd, adjust, Some(stop))
             .map(|(image, _)| image)
     }
 
     /// True after a stopped or failed render made LibRaw free the unpacked RAW data (its exception
     /// handler does that for every failure of the processing, not only a stop): every later render,
-    /// [`statistics`](Self::statistics) and [`clipping_map`](Self::clipping_map) fails with an
+    /// [`statistics`](Self::statistics), [`channel_means`](Self::channel_means) and
+    /// [`clipping_map`](Self::clipping_map) fails with an
     /// error that starts with `spent:`, and the file must be opened again.
     pub fn is_spent(&self) -> bool {
         // SAFETY: live session; the shim only reads a flag.
@@ -798,7 +1034,7 @@ impl Session {
     /// a Bayer file with a margin of at least 8 px). An image from LibRaw whose size is not the
     /// box the shim processed, or a box that does not hold the asked one, is refused.
     pub fn render_region_with(&mut self, r: Rect, margin: u32, demosaic: Demosaic) -> Result<Rgb8> {
-        self.render_region_checked(r, margin, demosaic, Exposure::NONE, None)
+        self.render_region_checked(r, margin, demosaic, Adjust::NONE, None)
     }
 
     /// Like [`render_region_with`](Self::render_region_with), with a stop check as in
@@ -827,7 +1063,29 @@ impl Session {
         exposure: Exposure,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Rgb8> {
-        self.render_region_checked(r, margin, demosaic, exposure, Some(stop))
+        self.render_region_adjusted(
+            r,
+            margin,
+            demosaic,
+            Adjust {
+                exposure,
+                ..Adjust::NONE
+            },
+            stop,
+        )
+    }
+
+    /// Like [`render_region_stoppable`](Self::render_region_stoppable), with the same stop and its
+    /// cost. LibRaw applies the exposure and white balance for this render before demosaicing.
+    pub fn render_region_adjusted(
+        &mut self,
+        r: Rect,
+        margin: u32,
+        demosaic: Demosaic,
+        adjust: Adjust,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Rgb8> {
+        self.render_region_checked(r, margin, demosaic, adjust, Some(stop))
     }
 
     fn render_region_checked(
@@ -835,10 +1093,14 @@ impl Session {
         r: Rect,
         margin: u32,
         demosaic: Demosaic,
-        exposure: Exposure,
+        adjust: Adjust,
         stop: Option<&(dyn Fn() -> bool + Sync)>,
     ) -> Result<Rgb8> {
-        if r.w == 0 || r.h == 0 || r.x + r.w > self.width || r.y + r.h > self.height {
+        if r.w == 0
+            || r.h == 0
+            || r.x.saturating_add(r.w) > self.width
+            || r.y.saturating_add(r.h) > self.height
+        {
             return Err(Error(format!(
                 "region {r:?} is outside the image ({}x{})",
                 self.width, self.height
@@ -846,10 +1108,10 @@ impl Session {
         }
         let x0 = r.x.saturating_sub(margin);
         let y0 = r.y.saturating_sub(margin);
-        let x1 = (r.x + r.w + margin).min(self.width);
-        let y1 = (r.y + r.h + margin).min(self.height);
+        let x1 = (r.x + r.w).saturating_add(margin).min(self.width);
+        let y1 = (r.y + r.h).saturating_add(margin).min(self.height);
         let asked = Rect::new(x0, y0, x1 - x0, y1 - y0);
-        let (big, used) = self.render(false, Some(asked), demosaic, exposure, stop)?;
+        let (big, used) = self.render(false, Some(asked), demosaic, adjust, stop)?;
         // The image must be exactly the box the shim processed: the asked one, or (X-Trans) a
         // wider box inside the image that holds it.
         let (ux1, uy1) = (
@@ -882,6 +1144,61 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn white_balance_multipliers_are_positive_finite_and_within_range() {
+        for [r, g, b] in [[2.4, 1.0, 1.6], [1.0; 3], [64.0, 1.0, 1.0]] {
+            assert_eq!(
+                Multipliers::new(r, g, b).map(Multipliers::get),
+                Some([r, g, b])
+            );
+        }
+        for r in [0.0, -1.0, f32::NAN, f32::INFINITY, 64.01] {
+            assert_eq!(Multipliers::new(r, 1.0, 1.0), None);
+        }
+        assert_eq!(Adjust::NONE.white_balance, WhiteBalance::AsShot);
+        assert_eq!(Adjust::NONE.exposure.ev(), 0.0);
+    }
+
+    #[test]
+    fn channel_means_need_positive_means_and_at_least_half_of_every_colour() {
+        let whole = ChannelMeans {
+            mean: [100.0, 200.0, 50.0],
+            used: [4; 3],
+            total: [4; 3],
+        };
+        let expected = Multipliers::new(2.0, 1.0, 4.0);
+        assert_eq!(whole.multipliers(), expected);
+        assert_eq!(
+            ChannelMeans {
+                used: [2, 4, 4],
+                ..whole
+            }
+            .multipliers(),
+            expected
+        );
+        for means in [
+            ChannelMeans {
+                used: [1, 4, 4],
+                ..whole
+            },
+            ChannelMeans {
+                total: [0, 4, 4],
+                used: [0, 4, 4],
+                ..whole
+            },
+            ChannelMeans {
+                mean: [0.0, 200.0, 50.0],
+                ..whole
+            },
+            ChannelMeans {
+                mean: [100.0, 200.0, 1.0],
+                ..whole
+            },
+        ] {
+            assert_eq!(means.multipliers(), None);
+        }
+    }
 
     #[test]
     fn demosaic_maps_to_libraw_user_qual() {

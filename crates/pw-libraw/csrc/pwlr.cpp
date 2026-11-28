@@ -2,12 +2,12 @@
  *
  * All decodes use the same fixed settings, chosen so that a region is pixel-identical to the
  * same area of a whole-image decode (docs/analyses/2026-11-04-m2-libraw-decode.md, follow-ups
- * 3 and 4): camera white balance, no auto white balance, no auto brightness, no white-level
+ * 3 and 4): no auto white balance, no auto brightness, no white-level
  * adjustment from the image data, sensor orientation, 8-bit sRGB. The demosaic method is chosen per
  * render: AHD (the default, ADR 0006) or PPG (ADR 0008 section 11; the egui loupe, ADR 0009).
- * The exposure (exp_correc, exp_shift, exp_preser; ADR 0027 section 3.4, T331) is the one setting
- * passed with each render: every render sets it, so a render without a correction leaves no trace
- * of an earlier one, and the statistics and the clipping map never see it.
+ * Each render sets the exposure and white balance (ADR 0027 sections 3.4 and 3.5).
+ * use_camera_wb and use_camera_matrix follow the balance. Both adjustments are independent of
+ * earlier renders and of the statistics and clipping map.
  *
  * Damaged files (M2 error handling): LibRaw does not return an error when the RAW data is
  * shorter than the file says (a truncated copy); many decoders read on and fill the rest. The
@@ -18,7 +18,9 @@
  * (white balance, colour profiles, ...) are only reported, never treated as damage. */
 #define LIBRAW_NODLL
 #include <libraw/libraw.h>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <math.h>
 #include <new>
 #include <stdio.h>
@@ -49,6 +51,13 @@ public:
   /* get_char() needs no override: past its buffer it calls read() above. */
 };
 
+struct pwlr_preset {
+  char name[24];
+  float mul[4];
+};
+
+static constexpr int PWLR_MAX_PRESETS = 96;
+
 struct PwSession {
   LibRaw *lr;
   PwStream *stream;
@@ -60,6 +69,8 @@ struct PwSession {
   /* 1 when a failed render (a stop, or any other failure) made LibRaw free the unpacked RAW data:
    * nothing but pwlr_close and pwlr_spent may be used on the session any more. */
   int spent;
+  pwlr_preset presets[PWLR_MAX_PRESETS];
+  int preset_count;
 };
 
 static const char PWLR_SPENT_TEXT[] =
@@ -84,6 +95,13 @@ typedef struct {
    * the file has it: */
   float camera_ev;
   int camera_ev_from; /* 0 none, 1 DNG BaselineExposure, 2 Fujifilm (ExifTool's RawExposureBias) */
+  float cam_mul[4], pre_mul[4], matrix_mul[4];
+  int daylight_from; /* 0 none, 1 pre_mul, 2 matrix */
+  int measurable;
+  int preset_count;
+  unsigned char other_ids[16];
+  int other_count;
+  long long presets_ns;
   char error[200];
 } pwlr_info;
 
@@ -146,12 +164,13 @@ static int on_progress(void *data, enum LibRaw_progress, int, int) {
 }
 
 void pwlr_close(void *session);
+static void pwlr_read_white_balance(PwSession *s, pwlr_info *info);
 
 /* Opens and unpacks; NULL on failure (info->error says why; "damaged: ..." for missing or
  * corrupt RAW data). */
 void *pwlr_open(const wchar_t *path, pwlr_info *info) {
   memset(info, 0, sizeof *info);
-  PwSession *s = new PwSession{nullptr, nullptr, 0, nullptr, nullptr, 0};
+  PwSession *s = new PwSession{};
   s->stream = new PwStream(path);
   if (!s->stream->valid()) {
     strcpy(info->error, "open: cannot read the file");
@@ -215,6 +234,7 @@ void *pwlr_open(const wchar_t *path, pwlr_info *info) {
     return 0;
   }
   pwlr_camera_ev(lr, info);
+  pwlr_read_white_balance(s, info);
   lr->set_progress_handler(on_progress, s);
   return s;
 }
@@ -289,12 +309,17 @@ static int pwlr_xtrans_axis(int a, int len, int size, int *lo_out, int *len_out)
  * works always does, in LibRaw 0.22), the session is spent (pwlr_spent): the error of every later
  * render, statistics and clipping map starts with "spent:" and LibRaw is not called.
  *
- * `exp_shift` is the exposure of this render (ADR 0027 section 3.4, T331), the one setting passed
- * per render: LibRaw's linear factor (2^EV) applied before the demosaic, 1.0 for none. Every render
+ * `exp_shift` is the exposure of this render (ADR 0027 section 3.4, T331): LibRaw's linear factor
+ * (2^EV) applied before the demosaic, 1.0 for none. Every render
  * sets exp_correc, exp_shift and exp_preser, so nothing of an earlier render's exposure is left. A
  * factor that is not finite or lies outside 0.25 to 8 (LibRaw's usable range, -2 to +3 EV) is
- * refused before LibRaw is called, and the session is untouched. */
-libraw_processed_image_t *pwlr_render(void *session, int quality, int half, float exp_shift, int x,
+ * refused before LibRaw is called, and the session is untouched.
+ * `user_mul` supplies this render's white balance (R, G1, B, G2), or NULL for as shot. Each
+ * render sets the four values, use_camera_wb and use_camera_matrix. A custom balance disables
+ * camera WB so it cannot overwrite user_mul, and retains the embedded colour matrix when present.
+ * Invalid multipliers are refused before LibRaw is called, leaving the session untouched. */
+libraw_processed_image_t *pwlr_render(void *session, int quality, int half, float exp_shift,
+                                      const float *user_mul, int x,
                                       int y, int w, int h, int *ox, int *oy, int *ow, int *oh,
                                       char *error, int (*stop)(void *ctx), void *ctx) {
   *ox = 0;
@@ -314,6 +339,14 @@ libraw_processed_image_t *pwlr_render(void *session, int quality, int half, floa
     snprintf(error, 200, "exposure shift %g is outside 0.25 to 8", (double)exp_shift);
     return 0;
   }
+  if (user_mul) {
+    for (int c = 0; c < 4; c++) {
+      if (!isfinite(user_mul[c]) || user_mul[c] <= 0.0f) {
+        strcpy(error, "white balance multipliers are not usable");
+        return 0;
+      }
+    }
+  }
   if (stop && stop(ctx)) {
     strcpy(error, "cancelled: the render was stopped before it started");
     return 0;
@@ -324,6 +357,9 @@ libraw_processed_image_t *pwlr_render(void *session, int quality, int half, floa
   lr->imgdata.params.exp_correc = (exp_shift != 1.0f) ? 1 : 0;
   lr->imgdata.params.exp_shift = exp_shift;
   lr->imgdata.params.exp_preser = PWLR_EXP_PRESER;
+  for (int c = 0; c < 4; c++) lr->imgdata.params.user_mul[c] = user_mul ? user_mul[c] : 0.0f;
+  lr->imgdata.params.use_camera_wb = user_mul ? 0 : 1;
+  lr->imgdata.params.use_camera_matrix = user_mul ? 3 : 1;
   if (w > 0 && h > 0) {
     /* The layout saved at the unpack; a render changes imgdata.idata and imgdata.sizes. */
     const libraw_rawdata_t &R = lr->imgdata.rawdata;
@@ -568,6 +604,205 @@ static int pwlr_layout_of(const libraw_rawdata_t &R, PwLayout *L, char *error) {
     strcpy(error, "no integer RAW data");
     return 0;
   }
+  return 1;
+}
+
+static bool pwlr_usable_rgb(const float *mul) {
+  for (int c = 0; c < 3; c++)
+    if (!isfinite(mul[c]) || mul[c] <= 0.0f) return false;
+  return true;
+}
+
+static bool pwlr_same_balance(const float *a, const float *b) {
+  if (!pwlr_usable_rgb(a) || !pwlr_usable_rgb(b)) return false;
+  for (int c : {0, 2}) {
+    const double ar = (double)a[c] / a[1], br = (double)b[c] / b[1];
+    if (fabs(ar - br) > 0.005 * br) return false;
+  }
+  return true;
+}
+
+/* dcraw's sRGB/D65 matrix, used to derive the daylight balance from cam_xyz. */
+static constexpr double PWLR_XYZ_RGB[3][3] = {
+    {0.412453, 0.357580, 0.180423},
+    {0.212671, 0.715160, 0.072169},
+    {0.019334, 0.119193, 0.950227},
+};
+
+static void pwlr_matrix_balance(const libraw_colordata_t &color, float *out) {
+  float mul[3];
+  for (int i = 0; i < 3; i++) {
+    double num = 0.0;
+    for (int j = 0; j < 3; j++) {
+      double cam_rgb = 0.0;
+      for (int k = 0; k < 3; k++) cam_rgb += color.cam_xyz[i][k] * PWLR_XYZ_RGB[k][j];
+      num += cam_rgb;
+    }
+    if (!isfinite(num) || num <= 0.0) return;
+    mul[i] = (float)(1.0 / num);
+  }
+  if (!pwlr_usable_rgb(mul)) return;
+  for (int i = 0; i < 3; i++) out[i] = mul[i];
+  out[3] = mul[1];
+}
+
+static void pwlr_add_preset(PwSession *s, const char *name, const float *mul) {
+  if (s->preset_count == PWLR_MAX_PRESETS || !pwlr_usable_rgb(mul)) return;
+  for (int i = 0; i < s->preset_count; i++)
+    if (strcmp(s->presets[i].name, name) == 0) return;
+  pwlr_preset &preset = s->presets[s->preset_count++];
+  snprintf(preset.name, sizeof preset.name, "%s", name);
+  memcpy(preset.mul, mul, sizeof preset.mul);
+}
+
+static void pwlr_read_white_balance(PwSession *s, pwlr_info *info) {
+  const auto start = std::chrono::steady_clock::now();
+  const libraw_rawdata_t &R = s->lr->imgdata.rawdata;
+  const libraw_colordata_t &color = R.color;
+  memcpy(info->cam_mul, color.cam_mul, sizeof info->cam_mul);
+  memcpy(info->pre_mul, color.pre_mul, sizeof info->pre_mul);
+  pwlr_matrix_balance(color, info->matrix_mul);
+  /* In the test set, pre_mul agrees with the D65 matrix for ARW, RAF and RW2. The Ricoh
+   * DNGs use the matrix fallback, and the Xiaomi DNGs have no usable cam_xyz matrix. */
+  if (pwlr_same_balance(info->pre_mul, info->matrix_mul)) {
+    info->daylight_from = 1;
+  } else if (pwlr_usable_rgb(info->matrix_mul)) {
+    info->daylight_from = 2;
+  }
+
+  static constexpr const char *names[] = {
+      "Daylight", "Fluorescent", "Tungsten", "Flash", nullptr, nullptr, nullptr, nullptr,
+      "Fine Weather", "Cloudy", "Shade", "Fluorescent D", "Fluorescent N", "Fluorescent W",
+      "Fluorescent WW", "Fluorescent L", "Illuminant A", "Illuminant B", "Illuminant C",
+      "D55", "D65", "D75", "D50", "Studio Tungsten",
+  };
+  static constexpr const char *extra_names[] = {"Sunset", "Underwater", "Fluorescent High",
+                                                "Mercury Vapor"};
+  for (int id = 0; id < 256; id++) {
+    const auto &row = color.WB_Coeffs[id];
+    const char *name = id >= 1 && id <= 24 ? names[id - 1] : nullptr;
+    if (id >= 64 && id <= 67) name = extra_names[id - 64];
+    if (name) {
+      const float mul[4] = {(float)row[0], (float)row[1], (float)row[2], (float)row[3]};
+      pwlr_add_preset(s, name, mul);
+    } else if ((row[0] || row[1] || row[2] || row[3]) && info->other_count < 16) {
+      info->other_ids[info->other_count++] = (unsigned char)id;
+    }
+  }
+
+  const float *temperatures[64];
+  int count = 0;
+  for (const auto &row : color.WBCT_Coeffs)
+    if (isfinite(row[0]) && row[0] > 0.0f) temperatures[count++] = row;
+  std::sort(temperatures, temperatures + count,
+            [](const float *a, const float *b) { return a[0] < b[0]; });
+  for (int i = 0; i < count; i++) {
+    char name[24];
+    const int length = snprintf(name, sizeof name, "%.0f K", round((double)temperatures[i][0]));
+    if (length > 0 && length < (int)sizeof name) pwlr_add_preset(s, name, temperatures[i] + 1);
+  }
+  info->preset_count = s->preset_count;
+  PwLayout layout;
+  char error[200];
+  info->measurable = pwlr_layout_of(R, &layout, error);
+  info->presets_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - start).count();
+}
+
+int pwlr_presets(void *session, pwlr_preset *out, int max) {
+  const PwSession *s = (const PwSession *)session;
+  if (!s || !out || max <= 0) return 0;
+  const int count = std::min(s->preset_count, max);
+  memcpy(out, s->presets, (size_t)count * sizeof *out);
+  return count;
+}
+
+struct pwlr_means {
+  double mean[3];
+  unsigned long long used[3], total[3];
+};
+
+} /* extern "C" */
+
+/* Walk complete cells once. Keep each cell's sums separate until its clipping and shadow
+ * tests have seen every photosite, including both greens on a Bayer sensor. */
+template <bool Mosaic>
+static void pwlr_channel_means_of(const libraw_rawdata_t &R, const PwLayout &L,
+                                  unsigned x, unsigned y, unsigned right, unsigned bottom,
+                                  pwlr_means *out) {
+  const auto &S = R.sizes;
+  const unsigned cell = L.cell;
+  const unsigned first_x = ((x + cell - 1) / cell) * cell;
+  const unsigned first_y = ((y + cell - 1) / cell) * cell;
+  const unsigned stride = Mosaic ? 1 : L.n;
+  const void *base = Mosaic ? (const void *)R.raw_image :
+      (R.color4_image ? (const void *)R.color4_image : (const void *)R.color3_image);
+  unsigned long long sum[3] = {};
+  for (unsigned cy = first_y; cy + cell <= bottom; cy += cell) {
+    const ushort *rows[3];
+    const unsigned char *colours[3];
+    const unsigned *pattern[3];
+    for (unsigned dy = 0; dy < cell; dy++) {
+      const unsigned row = cy + dy;
+      rows[dy] = (const ushort *)((const unsigned char *)base +
+          (size_t)(row + S.top_margin) * S.raw_pitch) + (size_t)S.left_margin * stride;
+      if (Mosaic) colours[dy] = L.cfa[row % L.frows];
+      pattern[dy] = L.pattern ? &L.rest[(row % L.prows) * L.pcols] : nullptr;
+    }
+    for (unsigned cx = first_x; cx + cell <= right; cx += cell) {
+      unsigned counts[3] = {}, sums[3] = {};
+      bool clipped = false, bright = false;
+      for (unsigned dy = 0; dy < cell; dy++) {
+        for (unsigned col = cx; col < cx + cell; col++) {
+          const unsigned extra = pattern[dy] ? pattern[dy][col % L.pcols] : 0;
+          const ushort *pixel = rows[dy] + (size_t)col * stride;
+          for (unsigned c = 0; c < (Mosaic ? 1u : 3u); c++) {
+            const unsigned c4 = Mosaic ? colours[dy][col % L.fcols] : c;
+            const unsigned ch = c4 == 3 ? 1 : c4;
+            const PwLimits &limit = L.lim[c4];
+            const unsigned black = limit.black + extra;
+            const unsigned value = pixel[c];
+            const unsigned above = value > black ? value - black : 0;
+            clipped |= value >= limit.white;
+            bright |= above >= limit.shadow;
+            counts[ch]++;
+            sums[ch] += above;
+          }
+        }
+      }
+      for (unsigned c = 0; c < 3; c++) out->total[c] += counts[c];
+      if (!clipped && bright) {
+        for (unsigned c = 0; c < 3; c++) {
+          out->used[c] += counts[c];
+          sum[c] += sums[c];
+        }
+      }
+    }
+  }
+  for (unsigned c = 0; c < 3; c++)
+    if (out->used[c]) out->mean[c] = (double)sum[c] / (double)out->used[c];
+}
+
+extern "C" {
+
+int pwlr_channel_means(void *session, unsigned x, unsigned y, unsigned w, unsigned h,
+                       pwlr_means *out, char *error) {
+  *out = {};
+  error[0] = 0;
+  const PwSession *s = (const PwSession *)session;
+  if (!s || !s->lr) { strcpy(error, "channel means: no session"); return -1; }
+  if (s->spent) { strcpy(error, PWLR_SPENT_TEXT); return -1; }
+  const auto &R = s->lr->imgdata.rawdata;
+  const unsigned width = R.sizes.width, height = R.sizes.height;
+  if (!w || !h || x > width || y > height || w > width - x || h > height - y) {
+    snprintf(error, 200, "region %ux%u at %u,%u is outside the image (%ux%u)", w, h, x, y,
+             width, height);
+    return -1;
+  }
+  PwLayout layout;
+  if (!pwlr_layout_of(R, &layout, error)) return 0;
+  if (layout.mosaic) pwlr_channel_means_of<true>(R, layout, x, y, x + w, y + h, out);
+  else pwlr_channel_means_of<false>(R, layout, x, y, x + w, y + h, out);
   return 1;
 }
 

@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T348](T348-libraw-white-balance-per-render.md) | ADR 0027 W6: the white balance per LibRaw render, the means under a RAW area and the file's presets (pw-libraw) | Open | Opus |
+| [T354](T354-faster-channel-means.md) | ADR 0027 W6: the RAW channel means made faster (pw-libraw) | Open | Opus |
 | [T349](T349-white-balance-in-the-render-path.md) | ADR 0027 W6: the white balance in the view core's render path (pw-viewcore) | Blocked | Opus |
 | [T350](T350-white-balance-in-the-state.md) | ADR 0027 W6: the white balance's mode in the view core's state (pw-viewcore) | Blocked | Opus |
 | [T351](T351-white-balance-keys-menu-marks.md) | ADR 0027 W6: the key, the menu and the mark of the white balance (pw-loupe) | Blocked | Opus |
@@ -96,7 +96,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T354 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T355 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
