@@ -804,6 +804,20 @@ step is measurably slower, the presets are read only when the menu is opened. No
 global switch for all adjustments is built: every adjustment is off by default and Backspace
 turns them off (§2.1), and the measurement is what guards the cost.
 
+**The daylight multipliers, how they are chosen and checked (owner, 2026-11-28, during T348):**
+T348's first run found `pre_mul` read at the open equal to the D65 matrix's multipliers within
+0.5 % on the owner's ARW, RAF and RW2 files, and on a Sony file (TN005701.ARW) a B/G 15.85 % below
+the camera's "Daylight" preset: the preset is for about D55 and LibRaw's multipliers for D65,
+whose bluer light needs less blue gain, so the two differ by that much by design. No DNG got a
+source, because the rule had no case for a `pre_mul` that differs from both `cam_mul` and the
+matrix. Decided: **the rule** is `pre_mul` when it equals the matrix's multipliers within 0.5 %
+(as ratios to green), else the matrix's multipliers when they are usable, else none. **The check**
+on the owner's files: the daylight multipliers exist (from `pre_mul` or the matrix); from
+`pre_mul` they equal the matrix's within 0.5 %; they differ from the camera's own balance
+(`cam_mul`) by more than 0.5 % in R/G or B/G (not a copy of it); and they are within 30 % of the
+file's "Daylight" preset where it has one, a guard against a wrong value only, not a measure of
+the D55–D65 difference. The 15 % of the cold read is dropped.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,

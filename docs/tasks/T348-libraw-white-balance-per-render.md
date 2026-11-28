@@ -155,9 +155,9 @@
      for i = 0..2 (and `matrix_mul[3] = matrix_mul[1]`); all zero when `cam_xyz` is all zero or a
      `num` is not above 0. Write the code with `pre_mul` as it is, run the `daylight` test of
      point 6 (it prints, per file, `cam_mul`, `pre_mul` at the open and `matrix_mul`), then finish
-     this point: if `pre_mul` differs from `cam_mul` and equals `matrix_mul` within 0.5 % (as
-     ratios to green), use `pre_mul` (`daylight_from` 1); if it equals `cam_mul` (or is 0) and
-     `matrix_mul` is usable, use `matrix_mul` (2); if neither is usable the file has no daylight
+     this point (rule changed by the owner, 2026-11-28, ADR 0027 §4.6): if `pre_mul` equals
+     `matrix_mul` within 0.5 % (as ratios to green), use `pre_mul` (`daylight_from` 1); else, if
+     `matrix_mul` is usable (not all zero), use `matrix_mul` (2); else the file has no daylight
      (0, `None`). The comment says which was found on which files. The multipliers are given as
      LibRaw has them (not scaled).
   5. **The measurement (W6-Q1, W6-Q6, W6-Q7):** in `tests/white_balance.rs`, an `#[ignore]` test
@@ -225,10 +225,17 @@
     multipliers are valid; no two presets of a file share a name; no file has more than 96. The
     ids with coefficients that are not presets are printed once per file (the ids), and a file
     that reached the limit of 96 is named.
-  - `daylight`: the printout of point 4 (`white_balance_diagnostics()`); for every ARW
-    `daylight()` is `Some` and within **15 %** of the "Daylight" preset's multipliers (R/G and B/G;
-    LibRaw's are for D65 and the camera's preset is about D55, so a few percent differ), or the
-    test stops and reports (then point 4's rule is wrong for that file); both values are printed.
+  - `daylight`: the printout of point 4 (`white_balance_diagnostics()`), with per file
+    `daylight()`, `daylight_from` and, where the file has a "Daylight" preset, both values and
+    the difference in percent (R/G and B/G). For every ARW, RAF and RW2 (owner, 2026-11-28,
+    ADR 0027 §4.6; the 15 % of the cold read is dropped: LibRaw's multipliers are for D65 and the
+    camera's preset about D55, which differ by about 15–20 % in B/G by design):
+    `daylight()` is `Some` with `daylight_from` 1 or 2; with `daylight_from` 1, `pre_mul` equals
+    `matrix_mul` within 0.5 % (R/G and B/G); `daylight()` differs from `cam_mul` by more than
+    0.5 % in R/G or B/G; and where the file has a "Daylight" preset, `daylight()` is within
+    **30 %** of it (R/G and B/G), a guard against a wrong value only. A file that fails stops the
+    test with its values. For every DNG the same is printed and its `daylight_from` reported,
+    not failed.
   - `can_measure()` is true for every ARW, RAF, RW2 and DNG of the owner's folder.
   - Point 1's refusal is a defence the Rust API cannot reach (`Multipliers::new` checks first); no
     test calls the shim directly. The shim has no environment variable or test build of its own.
@@ -248,3 +255,5 @@
 | 2026-11-28 | Blocked | Cold read and chain review: `use_camera_wb` off (and `use_camera_matrix` 3) for a balanced render, since LibRaw copies the camera's multipliers over `user_mul`; the daylight fallback worked out from `cam_xyz` × dcraw's sRGB/D65 matrix (`rgb_cam`'s rows each sum to 1); the means judge whole cells as the clipping map does; the FFI of the presets and the diagnostics named; the shim times its own preset read (no environment variable); the 96-preset limit and G2 not checked; the daylight test within 15 %; `PM-raw.ARW` opened by its path; exact counts for a 12 × 12 area; `can_measure`; the statistics' time beside the means; the line numbers; the baseline `latency.ps1` is the reviewer's, before this task |
 | 2026-11-28 | Open | Set to Open by the reviewer after the owner's approval of the chain T348–T353; T349–T353 wait in turn. The reviewer records the baseline `latency.ps1` (every adjustment off) before an agent starts this task |
 | 2026-11-28 | Open | Baseline `latency.ps1` before this task (ADR 0027 §4.6), run by the owner: release build of `a1c7e88`, `s6\a1`, the preview at fit, every adjustment off, 13 steps × 2.5 s (log `pm-study\results\run-log-w6.txt`, label `w6-fit-base-a1`): every step seen; first change median 6.0 ms (steps 2–13: 5.2–9.2 ms, median 6.05 ms); step 1 51.4 ms (settled 114 ms, two changes: the next image was not yet prefetched when the series started, so it is left out of the comparison). Memory after 13 steps 2.4 GB. W5's baseline was 5.5 ms (max 10.5); the difference is within the run-to-run spread. The comparison after T353 uses steps 2–13 |
+| 2026-11-28 | Open | The real-file daylight test stopped at TN005701.ARW. The open-time pre_mul agrees with the D65 matrix within 0.5%, but its B/G of 1.3510512 is 15.85% below the camera Daylight preset's 1.6054688. All listed ARW, RAF and RW2 files selected pre_mul. The DNGs selected no source under the specified rule. The daylight tolerance and selection rule await the owner's decision. |
+| 2026-11-28 | Open | Owner decision on the daylight (ADR 0027 §4.6, recorded by the reviewer): point 4's rule is now `pre_mul` when it equals `matrix_mul` within 0.5 %, else `matrix_mul` when usable, else none (the DNGs had no case before); the `daylight` test drops the 15 % against the camera's preset (D55 against D65 differ by about that by design) and checks instead: a source for every ARW, RAF and RW2, `pre_mul` equal to `matrix_mul` within 0.5 % when it is used, a difference from `cam_mul` above 0.5 %, and the "Daylight" preset within 30 % as a guard; DNGs printed and reported, not failed. The agent goes on from its current change |
