@@ -815,6 +815,14 @@ pub enum Command {
     NextChannel,
     /// Step backward through the channel views (View ▸ Channel ▸ Previous Channel, Shift+N).
     PreviousChannel,
+    /// Select As Shot (View ▸ White Balance).
+    WhiteBalanceShot,
+    /// Toggle auto white balance (View ▸ White Balance, W).
+    AutoWhiteBalance,
+    /// Use LibRaw's daylight multipliers (View ▸ White Balance).
+    WhiteBalanceDaylight,
+    /// Select the file's white balance preset at this position.
+    WhiteBalancePreset(u8),
     /// Select a channel view for the session (View ▸ Channel; ADR 0027 W4).
     Channel(Channel),
     /// Every adjustment of the preview turned off (View ▸ Reset Adjustments, Backspace; ADR 0027
@@ -896,6 +904,10 @@ impl Command {
             | Self::CameraBrightness
             | Self::NextChannel
             | Self::PreviousChannel
+            | Self::WhiteBalanceShot
+            | Self::AutoWhiteBalance
+            | Self::WhiteBalanceDaylight
+            | Self::WhiteBalancePreset(_)
             | Self::Channel(_)
             | Self::ResetAdjustments
             | Self::Compare
@@ -938,6 +950,7 @@ pub enum SubmenuKind {
     Label,
     Theme,
     Exposure,
+    WhiteBalance,
     Channel,
 }
 
@@ -960,6 +973,8 @@ pub enum MenuEntry {
     /// separator and Choose File…, or only Choose File… (ADR 0017 U13-Q8, U13-Q26, T303), drawn
     /// from the folder as it is when the menu opens. Not in the menu bar.
     Templates,
+    /// The White Balance submenu and a separator, drawn only in the preview.
+    PreviewWhiteBalance,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1042,6 +1057,21 @@ const EXPOSURE_ITEMS: &[MenuItem] = &[
     MenuItem {
         command: Command::CameraBrightness,
         key: shift(Key::B),
+    },
+];
+
+const WHITE_BALANCE_ITEMS: &[MenuItem] = &[
+    MenuItem {
+        command: Command::WhiteBalanceShot,
+        key: None,
+    },
+    MenuItem {
+        command: Command::AutoWhiteBalance,
+        key: plain(Key::W),
+    },
+    MenuItem {
+        command: Command::WhiteBalanceDaylight,
+        key: None,
     },
 ];
 
@@ -1160,6 +1190,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::Sharpening, plain(Key::U)),
             item(Command::Shadows, plain(Key::O)),
             MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
+            MenuEntry::Submenu(SubmenuKind::WhiteBalance, WHITE_BALANCE_ITEMS),
             MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS),
             item(Command::ResetAdjustments, plain(Key::Backspace)),
             item(Command::Compare, plain(Key::C)),
@@ -1202,7 +1233,8 @@ pub const MENUS: &[Menu] = &[
 /// same key as its item in `MENUS` (E-Q18). Left out on purpose: Move to Subfolders, RAW ↔ JPEG,
 /// Delete Rejected Images, Reload Folder (ADR 0026 §3.1, T241) and Buttons on Thumbnails (ADR 0017
 /// §2.8, T245), which act on the folder or the view, not on the images clicked. Apply Template,
-/// right after Metadata…, is only here (ADR 0017 U13-Q8, T303).
+/// right after Metadata…, is only here (ADR 0017 U13-Q8, T303). White Balance is drawn before
+/// Delete to Recycle Bin only in the preview (T351).
 pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     MenuEntry::ExternalPrograms,
     item(Command::ShowInExplorer, None),
@@ -1215,8 +1247,27 @@ pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     item(Command::Metadata, plain(Key::M)),
     MenuEntry::Templates,
     MenuEntry::Separator,
+    MenuEntry::PreviewWhiteBalance,
     item(Command::DeleteToRecycleBin, plain(Key::Delete)),
 ];
+
+/// The right-click menu entries for the contact sheet or the preview (ADR 0019 E-Q17).
+pub fn image_context_entries(in_preview: bool) -> Vec<MenuEntry> {
+    let mut entries = Vec::new();
+    for &entry in IMAGE_CONTEXT_MENU {
+        if entry == MenuEntry::PreviewWhiteBalance {
+            if in_preview {
+                entries.extend([
+                    MenuEntry::Submenu(SubmenuKind::WhiteBalance, WHITE_BALANCE_ITEMS),
+                    MenuEntry::Separator,
+                ]);
+            }
+        } else {
+            entries.push(entry);
+        }
+    }
+    entries
+}
 
 /// Every item of the menu bar, submenus included, in menu order.
 pub fn menu_items() -> Vec<MenuItem> {
@@ -1230,7 +1281,8 @@ pub fn menu_items() -> Vec<MenuItem> {
                 | MenuEntry::Filter
                 | MenuEntry::Sort
                 | MenuEntry::ExternalPrograms
-                | MenuEntry::Templates => {}
+                | MenuEntry::Templates
+                | MenuEntry::PreviewWhiteBalance => {}
             }
         }
     }
@@ -1268,11 +1320,13 @@ mod tests {
     #[test]
     fn the_default_map_gives_every_menu_item_its_old_key() {
         let map = KeyMap::default();
-        let context_items = IMAGE_CONTEXT_MENU.iter().flat_map(|entry| match entry {
-            MenuEntry::Item(item) => vec![*item],
-            MenuEntry::Submenu(_, sub) => sub.to_vec(),
-            _ => Vec::new(),
-        });
+        let context_items = image_context_entries(true)
+            .into_iter()
+            .flat_map(|entry| match entry {
+                MenuEntry::Item(item) => vec![item],
+                MenuEntry::Submenu(_, sub) => sub.to_vec(),
+                _ => Vec::new(),
+            });
         for item in menu_items().into_iter().chain(context_items) {
             assert_eq!(menu_key(item, &map), item.key, "{:?}", item.command);
         }
@@ -1975,8 +2029,33 @@ mod tests {
                 item(Command::Metadata, plain(Key::M)),
                 MenuEntry::Templates,
                 MenuEntry::Separator,
+                MenuEntry::PreviewWhiteBalance,
                 item(Command::DeleteToRecycleBin, plain(Key::Delete)),
             ][..]
+        );
+    }
+
+    #[test]
+    fn only_the_preview_context_menu_includes_white_balance() {
+        let sheet: Vec<_> = IMAGE_CONTEXT_MENU
+            .iter()
+            .copied()
+            .filter(|entry| *entry != MenuEntry::PreviewWhiteBalance)
+            .collect();
+        assert_eq!(image_context_entries(false), sheet);
+
+        let preview = image_context_entries(true);
+        let (prefix, suffix) = preview.split_at(preview.len() - 5);
+        assert_eq!(prefix, &sheet[..sheet.len() - 3]);
+        assert_eq!(
+            suffix,
+            [
+                MenuEntry::Templates,
+                MenuEntry::Separator,
+                MenuEntry::Submenu(SubmenuKind::WhiteBalance, WHITE_BALANCE_ITEMS),
+                MenuEntry::Separator,
+                item(Command::DeleteToRecycleBin, plain(Key::Delete)),
+            ]
         );
     }
 
@@ -2045,7 +2124,11 @@ mod tests {
                 MenuEntry::Filter | MenuEntry::Sort => {
                     panic!("{entry:?} is in the right-click menu");
                 }
-                MenuEntry::Separator | MenuEntry::ExternalPrograms | MenuEntry::Templates => {}
+                // Apply Template is exclusive to this menu. White Balance comes from View.
+                MenuEntry::Separator
+                | MenuEntry::ExternalPrograms
+                | MenuEntry::Templates
+                | MenuEntry::PreviewWhiteBalance => {}
             }
         }
     }
@@ -2213,7 +2296,7 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 16),
+            view.entries.get(anchor + 1..anchor + 17),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
@@ -2223,6 +2306,7 @@ mod tests {
                     item(Command::Sharpening, Some(KeyChord { key: Key::U, ..j })),
                     item(Command::Shadows, plain(Key::O)),
                     MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
+                    MenuEntry::Submenu(SubmenuKind::WhiteBalance, WHITE_BALANCE_ITEMS),
                     MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS),
                     item(
                         Command::ResetAdjustments,
@@ -2365,12 +2449,13 @@ mod tests {
             panic!("the View menu has Show Fine Details");
         };
         assert_eq!(
-            view.entries.get(fine + 1..fine + 6),
+            view.entries.get(fine + 1..fine + 7),
             Some(
                 &[
                     item(Command::Sharpening, Some(u)),
                     item(Command::Shadows, plain(Key::O)),
                     MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
+                    MenuEntry::Submenu(SubmenuKind::WhiteBalance, WHITE_BALANCE_ITEMS),
                     MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS),
                     item(Command::ResetAdjustments, Some(backspace)),
                 ][..]
@@ -2408,6 +2493,39 @@ mod tests {
         assert_eq!(Command::Shadows.acts_in(), Where::Loupe);
         for item in EXPOSURE_ITEMS {
             assert_eq!(item.command.acts_in(), Where::Loupe);
+        }
+    }
+
+    #[test]
+    fn white_balance_submenu_items_have_their_default_keys_and_act_in_the_loupe() {
+        assert_eq!(
+            WHITE_BALANCE_ITEMS,
+            &[
+                MenuItem {
+                    command: Command::WhiteBalanceShot,
+                    key: None
+                },
+                MenuItem {
+                    command: Command::AutoWhiteBalance,
+                    key: plain(Key::W)
+                },
+                MenuItem {
+                    command: Command::WhiteBalanceDaylight,
+                    key: None
+                },
+            ],
+        );
+        let key_map = KeyMap::default();
+        for item in WHITE_BALANCE_ITEMS.iter().copied().chain([MenuItem {
+            command: Command::WhiteBalancePreset(95),
+            key: None,
+        }]) {
+            assert_eq!(item.command.acts_in(), Where::Loupe);
+            assert_eq!(menu_key(item, &key_map), item.key);
+            assert_eq!(
+                KeyAction::of_command(item.command),
+                (item.command == Command::AutoWhiteBalance).then_some(KeyAction::AutoWhiteBalance)
+            );
         }
     }
 

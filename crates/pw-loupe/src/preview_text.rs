@@ -8,7 +8,7 @@
 
 use pw_viewcore::{
     AdjustState, Channel, ClippingState, Ev, ExposureBase, ExposureMode, ExposureState, FinePause,
-    FineState, SharpenState, Sharpening, Zoom,
+    FineState, SharpenState, Sharpening, Wb, WbBase, WhiteBalanceState, Zoom,
 };
 
 use crate::shell::KeyChord;
@@ -215,7 +215,8 @@ pub struct ExposureKeys {
     pub camera: Option<KeyChord>,
 }
 
-/// The marks in row order (ADR 0027 §2.1): "Fine", "USM", exposure, "Shadows", and channel view.
+/// The marks in row order (ADR 0027 §2.1): "Fine", "USM", exposure, "Shadows", white balance,
+/// and channel view.
 /// Off adjustments have no mark. Paused adjustments are dimmed. The shortcuts and values
 /// appear in the hover texts when available.
 // Each mark receives its own state, shortcut and any values needed for its hover text.
@@ -228,6 +229,7 @@ pub fn adjustment_marks(
     values: Sharpening,
     (exposure, exposure_keys): (&ExposureState, ExposureKeys),
     (shadows, shadows_key, shadows_amount): (&AdjustState, Option<KeyChord>, u8),
+    (white_balance, wb_key): (&WhiteBalanceState, Option<KeyChord>),
     (channel_state, channel, channel_key): (&AdjustState, Channel, Option<KeyChord>),
 ) -> Vec<AdjustmentMark> {
     let mut marks = Vec::new();
@@ -235,6 +237,7 @@ pub fn adjustment_marks(
     marks.extend(sharpen_mark(sharpen, sharpen_key, values));
     marks.extend(exposure_mark(exposure, exposure_keys));
     marks.extend(shadows_mark(*shadows, shadows_key, shadows_amount));
+    marks.extend(white_balance_mark(white_balance, wb_key));
     marks.extend(channel_mark(*channel_state, channel, channel_key));
     marks
 }
@@ -568,6 +571,117 @@ fn shadows_mark(state: AdjustState, key: Option<KeyChord>, amount: u8) -> Option
     })
 }
 
+fn white_balance_mark(state: &WhiteBalanceState, key: Option<KeyChord>) -> Option<AdjustmentMark> {
+    if state.view == AdjustState::Off {
+        return None;
+    }
+    let text = match &state.base {
+        WbBase::Shot => "WB as shot".to_owned(),
+        WbBase::Auto | WbBase::AutoWaiting => "WB auto".to_owned(),
+        WbBase::AutoNone => "WB auto: none".to_owned(),
+        WbBase::Grey => "WB gray".to_owned(),
+        WbBase::Daylight => "WB Daylight (LibRaw)".to_owned(),
+        WbBase::DaylightNone => "WB Daylight (LibRaw): none".to_owned(),
+        WbBase::Preset(name) => format!("WB {name}"),
+        WbBase::PresetNone(name) => format!("WB {name}: none"),
+    };
+    let key = key.map(key_text);
+    let dimmed = state.view == AdjustState::Paused;
+    let hover = if dimmed {
+        paused_white_balance_hover(&state.base, key.as_deref())
+    } else {
+        white_balance_hover(state, key.as_deref())
+    };
+    Some(AdjustmentMark {
+        text,
+        dimmed,
+        hover,
+    })
+}
+
+fn paused_white_balance_hover(base: &WbBase, key: Option<&str>) -> String {
+    match (base, key) {
+        (WbBase::Auto | WbBase::AutoWaiting | WbBase::AutoNone, Some(key)) => {
+            format!("Auto white balance ({key}): applies only to a RAW file in RAW mode.")
+        }
+        (WbBase::Auto | WbBase::AutoWaiting | WbBase::AutoNone, None) => {
+            "Auto white balance: applies only to a RAW file in RAW mode.".to_owned()
+        }
+        (WbBase::Grey, _) => {
+            "White balance from gray: applies only to a RAW file in RAW mode.".to_owned()
+        }
+        (WbBase::Daylight | WbBase::DaylightNone, _) => {
+            "Daylight (LibRaw): applies only to a RAW file in RAW mode.".to_owned()
+        }
+        (WbBase::Preset(name) | WbBase::PresetNone(name), _) => {
+            format!("White balance {name}: applies only to a RAW file in RAW mode.")
+        }
+        (WbBase::Shot, _) => "White balance as shot: the view is being made again.".to_owned(),
+    }
+}
+
+fn white_balance_hover(state: &WhiteBalanceState, key: Option<&str>) -> String {
+    let gains = match state.wb {
+        Wb::Shot => None,
+        Wb::Mul { r, b } => Some((wb_gain_text(r), wb_gain_text(b))),
+    };
+    let mut hover = match (&state.base, gains, key) {
+        (WbBase::Shot, _, _) => "White balance as shot: the view is being made again.".to_owned(),
+        (WbBase::AutoWaiting, _, Some(key)) | (WbBase::Auto, None, Some(key)) => {
+            format!("Auto white balance ({key}): being worked out.")
+        }
+        (WbBase::AutoWaiting, _, None) | (WbBase::Auto, None, None) => {
+            "Auto white balance: being worked out.".to_owned()
+        }
+        (WbBase::AutoNone, _, Some(key)) => {
+            format!("Auto white balance ({key}): none could be worked out, the view is as shot.")
+        }
+        (WbBase::AutoNone, _, None) => {
+            "Auto white balance: none could be worked out, the view is as shot.".to_owned()
+        }
+        (WbBase::DaylightNone, _, _) => {
+            "Daylight (LibRaw): the file has none, the view is as shot.".to_owned()
+        }
+        (WbBase::PresetNone(name), _, _) => {
+            format!("White balance {name}: the file has none, the view is as shot.")
+        }
+        (WbBase::Auto, Some((r, b)), Some(key)) => format!(
+            "Auto white balance ({key}): red ×{r}, blue ×{b}, worked out over the whole image so \
+             that its average color is neutral; the histogram and the overlays are as shot."
+        ),
+        (WbBase::Auto, Some((r, b)), None) => format!(
+            "Auto white balance: red ×{r}, blue ×{b}, worked out over the whole image so \
+             that its average color is neutral; the histogram and the overlays are as shot."
+        ),
+        (WbBase::Grey, Some((r, b)), _) => format!(
+            "White balance from gray: red ×{r}, blue ×{b}; the histogram and the overlays are as shot."
+        ),
+        (WbBase::Daylight, Some((r, b)), _) => format!(
+            "Daylight (LibRaw): red ×{r}, blue ×{b}; the histogram and the overlays are as shot."
+        ),
+        (WbBase::Preset(name), Some((r, b)), _) => format!(
+            "White balance {name} (from the file): red ×{r}, blue ×{b}; the histogram and the overlays are as shot."
+        ),
+        // A RAW session can still be opening, before the daylight or preset gains are known.
+        (WbBase::Daylight, None, _) => "Daylight (LibRaw): the file is being read.".to_owned(),
+        (WbBase::Preset(name), None, _) => format!("White balance {name}: the file is being read."),
+        (WbBase::Grey, None, _) => {
+            "White balance from gray: the histogram and the overlays are as shot.".to_owned()
+        }
+    };
+    if state.view == AdjustState::Waiting
+        && !matches!(state.base, WbBase::Shot | WbBase::AutoWaiting)
+    {
+        hover.push_str(" The view is being made again.");
+    }
+    hover
+}
+
+fn wb_gain_text(thousandths: u32) -> String {
+    let hundredths = (u64::from(thousandths) + 5) / 10;
+    format!("{}.{:02}", hundredths / 100, hundredths % 100)
+}
+
 fn channel_mark(
     state: AdjustState,
     channel: Channel,
@@ -866,6 +980,7 @@ mod tests {
                     usm_off.2,
                     exposure_off(),
                     SHADOWS_OFF,
+                    (&WhiteBalanceState::off(), None),
                     CHANNEL_OFF,
                 )
                 .is_empty()
@@ -908,6 +1023,7 @@ mod tests {
                         usm_off.2,
                         exposure_off(),
                         SHADOWS_OFF,
+                        (&WhiteBalanceState::off(), None),
                         CHANNEL_OFF,
                     ),
                     vec![AdjustmentMark {
@@ -987,6 +1103,7 @@ mod tests {
                         values,
                         exposure_off(),
                         SHADOWS_OFF,
+                        (&WhiteBalanceState::off(), None),
                         CHANNEL_OFF,
                     )
                     .is_empty()
@@ -1040,6 +1157,7 @@ mod tests {
                         values,
                         exposure_off(),
                         SHADOWS_OFF,
+                        (&WhiteBalanceState::off(), None),
                         CHANNEL_OFF,
                     ),
                     vec![usm(dimmed, hover)],
@@ -1056,6 +1174,7 @@ mod tests {
             Sharpening::DEFAULT,
             exposure_off(),
             SHADOWS_OFF,
+            (&WhiteBalanceState::off(), None),
             CHANNEL_OFF,
         );
         assert_eq!(
@@ -1084,6 +1203,7 @@ mod tests {
                         values,
                         exposure_off(),
                         SHADOWS_OFF,
+                        (&WhiteBalanceState::off(), None),
                         CHANNEL_OFF,
                     )
                     .first()
@@ -1117,6 +1237,7 @@ mod tests {
             Sharpening::DEFAULT,
             (state, keys),
             SHADOWS_OFF,
+            (&WhiteBalanceState::off(), None),
             CHANNEL_OFF,
         )
     }
@@ -1456,6 +1577,7 @@ mod tests {
                     Sharpening::DEFAULT,
                     (&exposure, default_exposure_keys()),
                     (&state, key, 75),
+                    (&WhiteBalanceState::off(), None),
                     CHANNEL_OFF,
                 );
                 let (first, shadows) = marks.split_at(3);
@@ -1477,6 +1599,239 @@ mod tests {
     }
 
     #[test]
+    fn white_balance_marks_show_the_base_gains_and_waiting_state() {
+        let key =
+            crate::keymap::KeyMap::default().first_key(crate::keymap::KeyAction::AutoWhiteBalance);
+        assert!(key.is_some());
+        // Nearest hundredth: (2415 + 5) / 10 = 242; (1568 + 5) / 10 = 157.
+        let gains = Wb::Mul { r: 2415, b: 1568 };
+        for (base, wb, text, plain, keyed) in [
+            (
+                WbBase::Shot,
+                Wb::Shot,
+                "WB as shot",
+                "White balance as shot: the view is being made again.",
+                None,
+            ),
+            (
+                WbBase::Auto,
+                gains,
+                "WB auto",
+                "Auto white balance: red ×2.42, blue ×1.57, worked out over the whole image so that its average color is neutral; the histogram and the overlays are as shot.",
+                Some(
+                    "Auto white balance (W): red ×2.42, blue ×1.57, worked out over the whole image so that its average color is neutral; the histogram and the overlays are as shot.",
+                ),
+            ),
+            (
+                WbBase::Grey,
+                gains,
+                "WB gray",
+                "White balance from gray: red ×2.42, blue ×1.57; the histogram and the overlays are as shot.",
+                None,
+            ),
+            (
+                WbBase::Daylight,
+                gains,
+                "WB Daylight (LibRaw)",
+                "Daylight (LibRaw): red ×2.42, blue ×1.57; the histogram and the overlays are as shot.",
+                None,
+            ),
+            (
+                WbBase::Preset("Shade".to_owned()),
+                gains,
+                "WB Shade",
+                "White balance Shade (from the file): red ×2.42, blue ×1.57; the histogram and the overlays are as shot.",
+                None,
+            ),
+            (
+                WbBase::AutoWaiting,
+                Wb::Shot,
+                "WB auto",
+                "Auto white balance: being worked out.",
+                Some("Auto white balance (W): being worked out."),
+            ),
+            (
+                WbBase::AutoNone,
+                Wb::Shot,
+                "WB auto: none",
+                "Auto white balance: none could be worked out, the view is as shot.",
+                Some("Auto white balance (W): none could be worked out, the view is as shot."),
+            ),
+            (
+                WbBase::DaylightNone,
+                Wb::Shot,
+                "WB Daylight (LibRaw): none",
+                "Daylight (LibRaw): the file has none, the view is as shot.",
+                None,
+            ),
+            (
+                WbBase::PresetNone("Shade".to_owned()),
+                Wb::Shot,
+                "WB Shade: none",
+                "White balance Shade: the file has none, the view is as shot.",
+                None,
+            ),
+        ] {
+            let mut state = WhiteBalanceState {
+                base,
+                wb,
+                ..WhiteBalanceState::off()
+            };
+            for (key, expected) in [(None, plain), (key, keyed.unwrap_or(plain))] {
+                state.view = AdjustState::Off;
+                assert_eq!(white_balance_mark(&state, key), None);
+                for view in [AdjustState::Shown, AdjustState::Waiting] {
+                    state.view = view;
+                    let hover = if view == AdjustState::Waiting
+                        && !matches!(state.base, WbBase::Shot | WbBase::AutoWaiting)
+                    {
+                        format!("{expected} The view is being made again.")
+                    } else {
+                        expected.to_owned()
+                    };
+                    assert_eq!(
+                        white_balance_mark(&state, key),
+                        Some(AdjustmentMark {
+                            text: text.to_owned(),
+                            dimmed: false,
+                            hover,
+                        })
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paused_white_balance_marks_are_dimmed_and_describe_raw_mode_without_gains() {
+        let key =
+            crate::keymap::KeyMap::default().first_key(crate::keymap::KeyAction::AutoWhiteBalance);
+        let auto = "Auto white balance: applies only to a RAW file in RAW mode.";
+        let auto_key = "Auto white balance (W): applies only to a RAW file in RAW mode.";
+        let daylight = "Daylight (LibRaw): applies only to a RAW file in RAW mode.";
+        let shade = "White balance Shade: applies only to a RAW file in RAW mode.";
+        for (base, text, plain, keyed) in [
+            (WbBase::Auto, "WB auto", auto, auto_key),
+            (WbBase::AutoWaiting, "WB auto", auto, auto_key),
+            (WbBase::AutoNone, "WB auto: none", auto, auto_key),
+            (
+                WbBase::Grey,
+                "WB gray",
+                "White balance from gray: applies only to a RAW file in RAW mode.",
+                "White balance from gray: applies only to a RAW file in RAW mode.",
+            ),
+            (WbBase::Daylight, "WB Daylight (LibRaw)", daylight, daylight),
+            (
+                WbBase::DaylightNone,
+                "WB Daylight (LibRaw): none",
+                daylight,
+                daylight,
+            ),
+            (WbBase::Preset("Shade".to_owned()), "WB Shade", shade, shade),
+            (
+                WbBase::PresetNone("Shade".to_owned()),
+                "WB Shade: none",
+                shade,
+                shade,
+            ),
+        ] {
+            let state = WhiteBalanceState {
+                base,
+                view: AdjustState::Paused,
+                ..WhiteBalanceState::off()
+            };
+            for (key, hover) in [(None, plain), (key, keyed)] {
+                assert_eq!(
+                    white_balance_mark(&state, key),
+                    Some(AdjustmentMark {
+                        text: text.to_owned(),
+                        dimmed: true,
+                        hover: hover.to_owned(),
+                    })
+                );
+            }
+        }
+    }
+
+    /// While a RAW session is still opening the base is known but its gains are not (`Wb::Shot`):
+    /// the hover says so instead of showing multipliers (the reviewer, T351).
+    #[test]
+    fn white_balance_hovers_without_known_gains() {
+        let key =
+            crate::keymap::KeyMap::default().first_key(crate::keymap::KeyAction::AutoWhiteBalance);
+        for (base, key, hover) in [
+            (WbBase::Auto, None, "Auto white balance: being worked out."),
+            (
+                WbBase::Auto,
+                key,
+                "Auto white balance (W): being worked out.",
+            ),
+            (
+                WbBase::Grey,
+                None,
+                "White balance from gray: the histogram and the overlays are as shot.",
+            ),
+            (
+                WbBase::Daylight,
+                None,
+                "Daylight (LibRaw): the file is being read.",
+            ),
+            (
+                WbBase::Preset("Shade".to_owned()),
+                None,
+                "White balance Shade: the file is being read.",
+            ),
+        ] {
+            let text = white_balance_mark(
+                &WhiteBalanceState {
+                    base,
+                    wb: Wb::Shot,
+                    view: AdjustState::Shown,
+                    ..WhiteBalanceState::off()
+                },
+                key,
+            )
+            .map(|mark| mark.hover);
+            assert_eq!(text.as_deref(), Some(hover));
+        }
+    }
+
+    #[test]
+    fn the_white_balance_mark_follows_exposure_and_shadows_and_precedes_channel() {
+        let exposure = ExposureState {
+            mode: ExposureMode::Auto,
+            base: ExposureBase::Auto(3),
+            steps: 0,
+            total: Ev::from_thirds(3),
+            view: AdjustState::Shown,
+        };
+        let white_balance = WhiteBalanceState {
+            base: WbBase::Auto,
+            wb: Wb::Mul { r: 2415, b: 1568 },
+            view: AdjustState::Shown,
+            ..WhiteBalanceState::off()
+        };
+        let marks = adjustment_marks(
+            &FineState::Off,
+            None,
+            &SharpenState::Off,
+            None,
+            Sharpening::DEFAULT,
+            (&exposure, ExposureKeys::default()),
+            (&AdjustState::Shown, None, 75),
+            (&white_balance, None),
+            (&AdjustState::Shown, Channel::Blue, None),
+        );
+        assert_eq!(
+            marks
+                .iter()
+                .map(|mark| mark.text.as_str())
+                .collect::<Vec<_>>(),
+            ["+1 EV auto", "Shadows", "WB auto", "B"]
+        );
+    }
+
+    #[test]
     fn the_channel_mark_follows_shadows_and_reports_each_state() {
         use crate::keymap::{KeyAction, KeyMap};
         let n = KeyMap::default().first_key(KeyAction::NextChannel).unwrap();
@@ -1495,6 +1850,7 @@ mod tests {
                 Sharpening::DEFAULT,
                 (&exposure, default_exposure_keys()),
                 (&AdjustState::Shown, None, 75),
+                (&WhiteBalanceState::off(), None),
                 (&state, channel, key),
             )
         };

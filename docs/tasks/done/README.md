@@ -358,3 +358,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T354](T354-faster-channel-means.md) | ADR 0027 W6: the RAW channel means made faster (pw-libraw) |
 | [T349](T349-white-balance-in-the-render-path.md) | ADR 0027 W6: the white balance in the view core's render path (pw-viewcore) |
 | [T350](T350-white-balance-in-the-state.md) | ADR 0027 W6: the white balance's mode in the view core's state (pw-viewcore) |
+| [T351](T351-white-balance-keys-menu-marks.md) | ADR 0027 W6: the key, the menu and the mark of the white balance (pw-loupe) |

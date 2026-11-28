@@ -624,6 +624,17 @@ only if it is seen in use.)
 - *A view that fails to render with a channel* shows today's error line, and the mark stays
   "being made again", as the shadows' does (T347).
 
+## The white balance (ADR 0027 W6)
+
+- *A `keys.txt` line on W* (T351): a `keys.txt` that binds W to another action acting in the
+  preview loses that line on loading (the key map's rule, as for N, O, B and U).
+- *As Shot sent again each frame outside the preview* (T351): the shell decides what to send from
+  the last drawn frame, which is not drawn while the contact sheet is shown, so it asks the view
+  core for As Shot on every frame there; the core does nothing when the mode is already As Shot
+  (one lock per frame).
+- *The presets of the current image only* (W6-Q4, T351): on the compare's held side the
+  right-click menu lists the current image's presets, not the held image's.
+
 ## Filter on text and metadata (ADR 0022)
 
 - *A sidecar changed by another program* (**accepted for good, 2026-11-26**; ADR 0022 S2-Q6, owner 2026-11-25): the filter's values

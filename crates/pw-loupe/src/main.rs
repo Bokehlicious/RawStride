@@ -68,13 +68,13 @@ use pw_loupe::{
     preview_only_marked, thumb_button_hover_text,
 };
 use pw_loupe::{
-    COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, IMAGE_CONTEXT_MENU,
-    MAX_EXTERNAL_PROGRAMS, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsPage,
-    SettingsText, ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where,
-    WindowRect, apply_text_sizes, clamp_column_width, column_width_range, command_text,
-    exiftool_message, external_program_limit_text, fallback_text, font_definitions, image_area,
-    key_action_width, key_text, menu_text, no_images_text, open_error_text, palette,
-    path_resolution_error_text, prune_error_text, recovery_text, rect_on_a_screen,
+    COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, MAX_EXTERNAL_PROGRAMS, MENUS,
+    MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsPage, SettingsText, ShellAction,
+    ShellSettings, ShellText, StartWindow, SubmenuKind, THEMES, Theme, Where, WindowRect,
+    apply_text_sizes, clamp_column_width, column_width_range, command_text, exiftool_message,
+    external_program_limit_text, fallback_text, font_definitions, image_area,
+    image_context_entries, key_action_width, key_text, menu_text, no_images_text, open_error_text,
+    palette, path_resolution_error_text, prune_error_text, recovery_text, rect_on_a_screen,
     settings_save_error_text, settings_text, shell_text, start_window, status_line_text,
     submenu_text, theme_text, tidied_programs, visuals,
 };
@@ -161,7 +161,7 @@ use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
     Channel, ClippingState, Config, ExposureMode, FocusState, Frame, ImageStatistics, Sharpening,
-    Source, Status, ViewCore, Zoom, shadows,
+    Source, Status, ViewCore, WbMode, WbPreset, WhiteBalanceState, Zoom, shadows,
 };
 
 mod inspector;
@@ -1357,9 +1357,11 @@ struct CompareOpen {
     held_size_known: bool,
     /// The unresolved path in the last drawn held frame, for resetting the other side's steps.
     last_held_path: Option<PathBuf>,
+    /// White balance mode in the held side's last drawn frame.
+    last_white_balance_mode: WbMode,
 }
 
-/// Session adjustments shared by the current and held previews (ADR 0027 W4 and W5).
+/// Session adjustments shared by the current and held previews (ADR 0027 W4–W6).
 #[derive(Default)]
 struct PreviewExposure {
     /// The exposure's mode (B, Shift+B; A-Q12: one at a time), off at start unless the setting
@@ -1369,6 +1371,10 @@ struct PreviewExposure {
     shadows: bool,
     /// The selected channel (N, Shift+N), full color at start and kept for the session.
     channel: Channel,
+    /// The requested white balance (W or the menu), as shot at start.
+    white_balance: WbMode,
+    /// The last mode sent to each core, current first and held second.
+    wb_sent: [Option<WbMode>; 2],
     /// The preview was shown on the frame before, so leaving it resets the steps (A-Q2).
     was_in_preview: bool,
 }
@@ -1433,12 +1439,36 @@ impl PreviewExposure {
         !self.channel_checked(Channel::Color)
     }
 
+    fn toggle_auto_white_balance(&mut self, repeat: bool, effective: &WbMode) {
+        if !repeat {
+            let mode = if *effective == WbMode::Auto {
+                WbMode::Shot
+            } else {
+                WbMode::Auto
+            };
+            self.set_white_balance(mode);
+        }
+    }
+
+    fn set_white_balance(&mut self, mode: WbMode) {
+        self.white_balance = mode;
+        self.wb_sent = [None, None];
+    }
+
+    fn set_preset(&mut self, place: u8, presets: &[WbPreset]) {
+        if let Some(preset) = presets.get(usize::from(place)) {
+            self.set_white_balance(WbMode::Preset(preset.name.clone()));
+        }
+    }
+
     fn reset(&mut self, cores: [&ViewCore<NativeBackend>; 2]) {
         self.exposure_mode = ExposureMode::Off;
         self.shadows = false;
         self.channel = Channel::Color;
+        self.set_white_balance(WbMode::Shot);
         for core in cores {
             core.reset_exposure_steps();
+            core.reset_white_balance();
         }
     }
 
@@ -1448,6 +1478,7 @@ impl PreviewExposure {
         comparing: bool,
         shadows_amount: u8,
         cores: [&ViewCore<NativeBackend>; 2],
+        frame_modes: [&WbMode; 2],
     ) {
         let [current, held] = cores;
         if self.was_in_preview && !in_preview {
@@ -1456,7 +1487,12 @@ impl PreviewExposure {
         }
         self.was_in_preview = in_preview;
 
-        for (core, visible) in [(current, in_preview), (held, in_preview && comparing)] {
+        for (((core, visible), sent), frame_mode) in
+            [(current, in_preview), (held, in_preview && comparing)]
+                .into_iter()
+                .zip(&mut self.wb_sent)
+                .zip(frame_modes)
+        {
             core.set_exposure_mode(if visible {
                 self.exposure_mode
             } else {
@@ -1468,8 +1504,41 @@ impl PreviewExposure {
             } else {
                 Channel::Color
             });
+            let target = if visible {
+                &self.white_balance
+            } else {
+                &WbMode::Shot
+            };
+            if let Some(mode) = wb_to_send(target, sent, frame_mode) {
+                core.set_white_balance(mode.clone());
+                *sent = Some(mode);
+            }
         }
     }
+}
+
+/// Send an explicit choice or restore the session mode after the core resets it.
+/// A gray sample stays with its image until an explicit choice or a core reset.
+fn wb_to_send(target: &WbMode, sent: &Option<WbMode>, frame_mode: &WbMode) -> Option<WbMode> {
+    (sent.as_ref() != Some(target) || (frame_mode != target && *frame_mode != WbMode::Grey))
+        .then(|| target.clone())
+}
+
+fn wb_checked(command: Command, frame: &WhiteBalanceState) -> Option<bool> {
+    Some(match command {
+        Command::WhiteBalanceShot => frame.mode == WbMode::Shot,
+        Command::AutoWhiteBalance => frame.mode == WbMode::Auto,
+        Command::WhiteBalanceDaylight => frame.mode == WbMode::Daylight,
+        Command::WhiteBalancePreset(place) => {
+            matches!(&frame.mode, WbMode::Preset(name) if frame.presets
+                .get(usize::from(place)).is_some_and(|preset| preset.name == *name))
+        }
+        _ => return None,
+    })
+}
+
+fn wb_on(frame: &WhiteBalanceState) -> bool {
+    frame.mode != WbMode::Shot
 }
 
 /// The images of one batch of moves: `(image, target folder, rating to restore)`, absolute paths
@@ -1763,6 +1832,8 @@ struct Loupe {
     /// The unresolved path, source and manual steps in the last drawn current frame (T335).
     last_preview_path: Option<PathBuf>,
     last_preview_source: Option<Source>,
+    /// White balance choices and mode from the last drawn current frame.
+    last_white_balance: WhiteBalanceState,
     last_exposure_steps: i32,
     /// The zoom and the effective scale of the last rendered preview frame, for the preview
     /// column's Zoom section (T111).
@@ -6580,6 +6651,7 @@ impl Loupe {
             | A::CameraBrightness
             | A::NextChannel
             | A::PreviousChannel
+            | A::AutoWhiteBalance
             | A::ResetAdjustments
             | A::Compare
             | A::HoldImage
@@ -6606,6 +6678,9 @@ impl Loupe {
                         }
                         A::NextChannel => self.exposure.step_channel(true, repeat),
                         A::PreviousChannel => self.exposure.step_channel(false, repeat),
+                        A::AutoWhiteBalance => self
+                            .exposure
+                            .toggle_auto_white_balance(repeat, &self.last_white_balance.mode),
                         A::ResetAdjustments => self.reset_adjustments(),
                         A::Compare => self.toggle_compare(),
                         A::HoldImage => self.hold_current_image(),
@@ -6896,9 +6971,8 @@ impl Loupe {
     }
 
     /// `Backspace` and View ▸ Reset Adjustments: turn off the preview's adjustments and return
-    /// the channel view to Color (ADR 0027 A-Q3, W3-Q8, W4-Q5). The view cores follow through
-    /// the `wish_` functions. It changes no setting. W6 adds its adjustments here and in
-    /// [`Self::any_adjustment_on`].
+    /// the channel view to Color and white balance to As Shot (ADR 0027 A-Q3, W3-Q8, W4-Q5,
+    /// W6-Q6). It changes no setting.
     fn reset_adjustments(&mut self) {
         self.fine_details = false;
         self.sharpening = false;
@@ -6912,6 +6986,7 @@ impl Loupe {
             || self.exposure.exposure_mode != ExposureMode::Off
             || self.exposure.shadows
             || self.exposure.channel_on()
+            || wb_on(&self.last_white_balance)
             || self.last_exposure_steps != 0
     }
 
@@ -6985,6 +7060,12 @@ impl Loupe {
             self.compare.is_some(),
             self.settings.shell.shadows_amount,
             [&self.core, &self.second_core],
+            [
+                &self.last_white_balance.mode,
+                self.compare
+                    .as_ref()
+                    .map_or(&WbMode::Shot, |open| &open.last_white_balance_mode),
+            ],
         );
     }
 
@@ -7040,6 +7121,7 @@ impl Loupe {
             view_sent: None,
             held_size_known: false,
             last_held_path: None,
+            last_white_balance_mode: WbMode::Shot,
         });
     }
 
@@ -8928,6 +9010,7 @@ impl Loupe {
             }
             // Greyed while no adjustment is on (ADR 0027 W3-Q8, T318); its key does not ask.
             Command::ResetAdjustments => self.any_adjustment_on(),
+            Command::WhiteBalanceDaylight => self.last_white_balance.has_daylight,
             Command::Shadows
             | Command::ExposureBrighter
             | Command::ExposureDarker
@@ -8980,7 +9063,7 @@ impl Loupe {
             Command::Theme(theme) => Some(shell.theme == theme),
             Command::Sort(key) => Some(shell.sort.key == key),
             Command::SortDescending => Some(shell.sort.descending),
-            _ => None,
+            _ => wb_checked(command, &self.last_white_balance),
         }
     }
 
@@ -9057,6 +9140,14 @@ impl Loupe {
             Command::NextChannel => self.exposure.step_channel(true, false),
             Command::PreviousChannel => self.exposure.step_channel(false, false),
             Command::Channel(channel) => self.exposure.set_channel(channel),
+            Command::WhiteBalanceShot => self.exposure.set_white_balance(WbMode::Shot),
+            Command::AutoWhiteBalance => self
+                .exposure
+                .toggle_auto_white_balance(false, &self.last_white_balance.mode),
+            Command::WhiteBalanceDaylight => self.exposure.set_white_balance(WbMode::Daylight),
+            Command::WhiteBalancePreset(place) => self
+                .exposure
+                .set_preset(place, &self.last_white_balance.presets),
             Command::ResetAdjustments => self.reset_adjustments(),
             Command::Compare => self.toggle_compare(),
             Command::HoldImage => self.hold_current_image(),
@@ -9285,6 +9376,7 @@ impl Loupe {
                             }
                             // Only the right-click menu has Apply Template (U13-Q8, T303).
                             MenuEntry::Templates => {}
+                            MenuEntry::PreviewWhiteBalance => {}
                         }
                     }
                 });
@@ -9301,16 +9393,43 @@ impl Loupe {
                 ui.separator();
             }
             MenuEntry::Submenu(kind, items) => {
+                // The View menu's White Balance opens with its items greyed, as Exposure and
+                // Channel do; the presets are the preview's current image's, listed only there.
                 ui.menu_button(submenu_text(kind), |ui| {
                     for item in items {
                         self.menu_item(ui, *item, commands);
+                    }
+                    if kind == SubmenuKind::WhiteBalance && self.in_preview() {
+                        self.white_balance_presets(ui, commands);
                     }
                 });
             }
             MenuEntry::ExternalPrograms => self.external_programs_menu(ui, commands),
             MenuEntry::Templates => self.templates_menu(ui, commands),
             // The menu bar draws the filter and the sort itself; the right-click menu has neither.
-            MenuEntry::Filter | MenuEntry::Sort => {}
+            MenuEntry::Filter | MenuEntry::Sort | MenuEntry::PreviewWhiteBalance => {}
+        }
+    }
+
+    /// List the current side's white balance presets after the fixed choices.
+    fn white_balance_presets(&self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
+        let presets = &self.last_white_balance.presets;
+        if !presets.is_empty() {
+            ui.separator();
+        }
+        for (index, preset) in presets.iter().enumerate() {
+            let Ok(place) = u8::try_from(index) else {
+                break;
+            };
+            let command = Command::WhiteBalancePreset(place);
+            let button = egui::Button::new(preset.name.as_str())
+                .selected(self.command_checked(command) == Some(true));
+            if ui
+                .add_enabled(self.command_enabled(command), button)
+                .clicked()
+            {
+                commands.push(command);
+            }
         }
     }
 
@@ -9351,10 +9470,10 @@ impl Loupe {
     /// The right-click menu on an image in the contact sheet or the preview (ADR 0019 §2.9,
     /// E-Q17, E-Q18): every entry of `IMAGE_CONTEXT_MENU`, with the menu bar's texts, keys and
     /// greying. Its commands go into the frame's `commands`, as the menu bar's do; the popup
-    /// closes by itself after a click.
+    /// closes by itself after a click. White Balance is drawn only in the preview.
     fn image_context_menu(&self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
-        for entry in IMAGE_CONTEXT_MENU {
-            self.menu_entry(ui, *entry, commands);
+        for entry in image_context_entries(self.in_preview()) {
+            self.menu_entry(ui, entry, commands);
         }
     }
 
@@ -10375,6 +10494,7 @@ impl Loupe {
                 camera: self.key_map.first_key(KeyAction::CameraBrightness),
             },
             shadows_key: self.key_map.first_key(KeyAction::Shadows),
+            wb_key: self.key_map.first_key(KeyAction::AutoWhiteBalance),
             shadows_amount: self.settings.shell.shadows_amount,
             channel: self.exposure.channel,
             channel_key: self.key_map.first_key(KeyAction::NextChannel),
@@ -10398,9 +10518,6 @@ impl Loupe {
             ui.scope_id().with("image"),
             &shown,
         );
-        if context_menu {
-            response.context_menu(|ui| self.image_context_menu(ui, commands));
-        }
         // The held side's menu is attached after the `match`: `open` borrows `self.compare`.
         let mut held_response = None;
         match (halves, &mut self.compare) {
@@ -10452,6 +10569,11 @@ impl Loupe {
                     self.core.reset_exposure_steps();
                 }
                 open.last_held_path.clone_from(&held_frame.path);
+                if open.last_white_balance_mode != held_frame.white_balance.mode {
+                    open.last_white_balance_mode
+                        .clone_from(&held_frame.white_balance.mode);
+                    ui.ctx().request_repaint();
+                }
                 // The held image's size became known: the view sent before it was clamped without
                 // it (T150), so it is sent again at the next frame (T154).
                 if !open.held_size_known && held_frame.size.is_some() {
@@ -10480,14 +10602,19 @@ impl Loupe {
                 self.second_focus_overlay.release();
             }
         }
-        if let Some(held) = held_response
-            && context_menu
-        {
-            held.context_menu(|ui| self.image_context_menu(ui, commands));
-        }
         self.last_frame_status = frame.status.clone();
         self.last_preview_path.clone_from(&frame.path);
         self.last_preview_source = Some(frame.source);
+        if self.last_white_balance.mode != frame.white_balance.mode {
+            ui.ctx().request_repaint();
+        }
+        self.last_white_balance.clone_from(&frame.white_balance);
+        if context_menu {
+            response.context_menu(|ui| self.image_context_menu(ui, commands));
+            if let Some(held) = held_response {
+                held.context_menu(|ui| self.image_context_menu(ui, commands));
+            }
+        }
         self.last_exposure_steps = frame.exposure.steps;
         self.last_zoom = Some((frame.zoom, frame.scale));
         // The clipping state, for the preview column's Clipping section (T148).
@@ -10604,6 +10731,7 @@ struct ImageAreaShown<'a> {
     exposure_keys: ExposureKeys,
     /// The key of Show Shadows, for the hover text of its mark (T335).
     shadows_key: Option<KeyChord>,
+    wb_key: Option<KeyChord>,
     /// The shadows' saved amount, for the hover text of its mark (T335).
     shadows_amount: u8,
     /// The selected channel, for the channel view's mark (T347).
@@ -10742,6 +10870,7 @@ fn draw_image_area(
             shown.sharpening,
             (&frame.exposure, shown.exposure_keys),
             (&frame.shadows, shown.shadows_key, shown.shadows_amount),
+            (&frame.white_balance, shown.wb_key),
             (&frame.channel, shown.channel, shown.channel_key),
         );
         paint_adjustment_marks(&painter, rect, &marks, &response);
@@ -14670,6 +14799,7 @@ fn run(options: Options) -> Result<(), String> {
                 last_frame_status: Status::Empty,
                 last_preview_path: None,
                 last_preview_source: None,
+                last_white_balance: WhiteBalanceState::off(),
                 last_exposure_steps: 0,
                 last_zoom: None,
                 last_statistics: None,
@@ -15082,12 +15212,20 @@ mod tests {
     }
 
     mod preview_exposure {
-        use super::super::{PreviewExposure, exposure_buttons};
-        use pw_loupe::KeyChord;
+        use super::super::{PreviewExposure, exposure_buttons, wb_checked, wb_on, wb_to_send};
+        use pw_loupe::{Command, KeyChord};
         use pw_viewcore::{
-            AdjustState, Channel, Config, ExposureMode, ViewCore, native::NativeBackend,
+            AdjustState, Channel, Config, ExposureMode, ViewCore, Wb, WbMode, WbPreset,
+            WhiteBalanceState, native::NativeBackend,
         };
         use std::path::PathBuf;
+
+        mod jpeg_fixture {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../pw-thumbcache/src/jpeg_fixture.rs"
+            ));
+        }
 
         #[test]
         fn exposure_starts_in_the_configured_mode_with_shadows_off() {
@@ -15239,12 +15377,6 @@ mod tests {
 
         #[test]
         fn only_visible_preview_cores_receive_the_channel_view() {
-            mod jpeg_fixture {
-                include!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../pw-thumbcache/src/jpeg_fixture.rs"
-                ));
-            }
             let file = std::env::temp_dir()
                 .join(format!("pw-loupe-channel-view-{}.jpg", std::process::id()));
             std::fs::write(&file, jpeg_fixture::SMALL).unwrap();
@@ -15262,13 +15394,155 @@ mod tests {
                 (true, false, AdjustState::Waiting, AdjustState::Off),
                 (false, true, AdjustState::Off, AdjustState::Off),
             ] {
-                state.wish(in_preview, comparing, 50, [&current, &held]);
+                state.wish(
+                    in_preview,
+                    comparing,
+                    50,
+                    [&current, &held],
+                    [&WbMode::Shot; 2],
+                );
                 assert_eq!(current.frame([1, 1]).channel, current_state);
                 assert_eq!(held.frame([1, 1]).channel, held_state);
             }
             assert_eq!(state.channel, Channel::Blue);
             drop((current, held));
             // a scanner may hold the new file for a moment; a leftover in %TEMP% is harmless
+            let _ = std::fs::remove_file(file);
+        }
+
+        #[test]
+        fn white_balance_choices_clear_both_sent_modes_and_ignore_repeats() {
+            let mut state = PreviewExposure::default();
+            assert_eq!(state.white_balance, WbMode::Shot);
+            for (effective, expected) in [
+                (WbMode::Auto, WbMode::Shot),
+                (WbMode::Shot, WbMode::Auto),
+                (WbMode::Grey, WbMode::Auto),
+            ] {
+                state.set_white_balance(WbMode::Daylight);
+                state.wb_sent = [Some(WbMode::Daylight), Some(WbMode::Shot)];
+                state.toggle_auto_white_balance(true, &effective);
+                assert_eq!(state.white_balance, WbMode::Daylight);
+                assert_eq!(state.wb_sent, [Some(WbMode::Daylight), Some(WbMode::Shot)]);
+                state.toggle_auto_white_balance(false, &effective);
+                assert_eq!(state.white_balance, expected);
+                assert_eq!(state.wb_sent, [None, None]);
+            }
+            for mode in [WbMode::Shot, WbMode::Daylight] {
+                state.wb_sent = [Some(WbMode::Auto), Some(WbMode::Shot)];
+                state.set_white_balance(mode.clone());
+                assert_eq!(state.white_balance, mode);
+                assert_eq!(state.wb_sent, [None, None]);
+            }
+            let presets = [
+                WbPreset {
+                    name: "Daylight".to_owned(),
+                    wb: Wb::Mul { r: 2100, b: 1500 },
+                },
+                WbPreset {
+                    name: "Shade".to_owned(),
+                    wb: Wb::Mul { r: 2500, b: 1300 },
+                },
+            ];
+            state.wb_sent = [Some(WbMode::Daylight), Some(WbMode::Shot)];
+            state.set_preset(95, &presets);
+            assert_eq!(state.white_balance, WbMode::Daylight);
+            assert_eq!(state.wb_sent, [Some(WbMode::Daylight), Some(WbMode::Shot)]);
+            state.set_preset(1, &presets);
+            assert_eq!(state.white_balance, WbMode::Preset("Shade".to_owned()));
+            assert_eq!(state.wb_sent, [None, None]);
+        }
+
+        #[test]
+        fn white_balance_is_resent_after_a_core_reset_and_preserves_a_gray_sample() {
+            for (sent, frame, expected) in [
+                (Some(WbMode::Auto), WbMode::Auto, None),
+                (None, WbMode::Auto, Some(WbMode::Auto)),
+                (Some(WbMode::Shot), WbMode::Auto, Some(WbMode::Auto)),
+                (Some(WbMode::Auto), WbMode::Shot, Some(WbMode::Auto)),
+                (Some(WbMode::Auto), WbMode::Grey, None),
+                (None, WbMode::Grey, Some(WbMode::Auto)),
+            ] {
+                assert_eq!(wb_to_send(&WbMode::Auto, &sent, &frame), expected);
+            }
+        }
+
+        #[test]
+        fn white_balance_checks_follow_the_current_frame_and_match_presets_by_name() {
+            let mut frame = WhiteBalanceState::off();
+            frame.presets = [
+                WbPreset {
+                    name: "Daylight".to_owned(),
+                    wb: Wb::Mul { r: 2100, b: 1500 },
+                },
+                WbPreset {
+                    name: "Shade".to_owned(),
+                    wb: Wb::Mul { r: 2500, b: 1300 },
+                },
+            ]
+            .into();
+            let commands = [
+                Command::WhiteBalanceShot,
+                Command::AutoWhiteBalance,
+                Command::WhiteBalanceDaylight,
+                Command::WhiteBalancePreset(0),
+                Command::WhiteBalancePreset(1),
+                Command::WhiteBalancePreset(95),
+            ];
+            for (mode, selected) in [
+                (WbMode::Shot, Some(Command::WhiteBalanceShot)),
+                (WbMode::Auto, Some(Command::AutoWhiteBalance)),
+                (WbMode::Daylight, Some(Command::WhiteBalanceDaylight)),
+                (WbMode::Grey, None),
+                (
+                    WbMode::Preset("Shade".to_owned()),
+                    Some(Command::WhiteBalancePreset(1)),
+                ),
+                (WbMode::Preset("Cloudy".to_owned()), None),
+            ] {
+                frame.mode = mode;
+                assert_eq!(wb_on(&frame), selected != Some(Command::WhiteBalanceShot));
+                for command in commands {
+                    assert_eq!(wb_checked(command, &frame), Some(Some(command) == selected));
+                }
+                assert_eq!(wb_checked(Command::Shadows, &frame), None);
+            }
+        }
+
+        #[test]
+        fn only_visible_preview_cores_receive_the_white_balance_mode() {
+            let file = std::env::temp_dir()
+                .join(format!("pw-loupe-white-balance-{}.jpg", std::process::id()));
+            std::fs::write(&file, jpeg_fixture::SMALL).unwrap();
+            let [current, held] = cores_with_manual_steps();
+            for core in [&current, &held] {
+                core.set_files(vec![file.clone()], 0);
+            }
+            let mut state = PreviewExposure::default();
+            state.set_white_balance(WbMode::Auto);
+            for (in_preview, comparing, expected) in [
+                (true, false, [WbMode::Auto, WbMode::Shot]),
+                (true, true, [WbMode::Auto, WbMode::Auto]),
+                (true, false, [WbMode::Auto, WbMode::Shot]),
+                (false, true, [WbMode::Shot, WbMode::Shot]),
+                (true, true, [WbMode::Auto, WbMode::Auto]),
+            ] {
+                let cores = [&current, &held];
+                let modes = cores.map(|core| core.frame([1, 1]).white_balance.mode);
+                state.wish(in_preview, comparing, 50, cores, [&modes[0], &modes[1]]);
+                assert_eq!(
+                    cores.map(|core| core.frame([1, 1]).white_balance.mode),
+                    expected
+                );
+            }
+            state.reset([&current, &held]);
+            assert_eq!(state.white_balance, WbMode::Shot);
+            assert_eq!(state.wb_sent, [None, None]);
+            assert_eq!(
+                [&current, &held].map(|core| core.frame([1, 1]).white_balance.mode),
+                [WbMode::Shot, WbMode::Shot]
+            );
+            drop((current, held));
             let _ = std::fs::remove_file(file);
         }
 
@@ -15292,13 +15566,13 @@ mod tests {
             let mut state = PreviewExposure::default();
             state.toggle_mode(ExposureMode::Auto, false);
             state.toggle_shadows(false);
-            state.wish(true, true, 50, [&current, &held]);
+            state.wish(true, true, 50, [&current, &held], [&WbMode::Shot; 2]);
             for core in [&current, &held] {
                 let exposure = core.frame([1, 1]).exposure;
                 assert_eq!(exposure.mode, ExposureMode::Auto);
                 assert_eq!(exposure.steps, 1);
             }
-            state.wish(false, false, 50, [&current, &held]);
+            state.wish(false, false, 50, [&current, &held], [&WbMode::Shot; 2]);
             for core in [&current, &held] {
                 let exposure = core.frame([1, 1]).exposure;
                 assert_eq!(exposure.mode, ExposureMode::Off);

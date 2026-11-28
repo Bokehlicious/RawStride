@@ -579,6 +579,7 @@ pub fn submenu_text(submenu: SubmenuKind) -> &'static str {
         SubmenuKind::Label => "Label",
         SubmenuKind::Theme => "Theme",
         SubmenuKind::Exposure => "Exposure",
+        SubmenuKind::WhiteBalance => "White Balance",
         SubmenuKind::Channel => "Channel",
     }
 }
@@ -643,6 +644,11 @@ pub fn command_text(command: Command) -> String {
         Command::CameraBrightness => "Camera Brightness".to_owned(),
         Command::NextChannel => "Next Channel".to_owned(),
         Command::PreviousChannel => "Previous Channel".to_owned(),
+        Command::WhiteBalanceShot => "As Shot".to_owned(),
+        Command::AutoWhiteBalance => "Auto White Balance".to_owned(),
+        Command::WhiteBalanceDaylight => "Daylight (LibRaw)".to_owned(),
+        // The preset menu draws the name from the file.
+        Command::WhiteBalancePreset(_) => "White balance preset".to_owned(),
         Command::Channel(channel) => match channel {
             Channel::Color => "Color",
             Channel::Red => "Red",
@@ -771,6 +777,7 @@ mod tests {
         assert_eq!(submenu_text(SubmenuKind::Label), "Label");
         assert_eq!(submenu_text(SubmenuKind::Theme), "Theme");
         assert_eq!(submenu_text(SubmenuKind::Exposure), "Exposure");
+        assert_eq!(submenu_text(SubmenuKind::WhiteBalance), "White Balance");
         assert_eq!(submenu_text(SubmenuKind::Channel), "Channel");
         assert_eq!(theme_text(Theme::Dark), "Dark");
         assert_eq!(theme_text(Theme::Light), "Light");
@@ -782,6 +789,14 @@ mod tests {
         assert_eq!(
             command_text(Command::MetadataTemplate),
             "Metadata Template…"
+        );
+    }
+
+    #[test]
+    fn white_balance_preset_command_has_placeholder_text() {
+        assert_eq!(
+            command_text(Command::WhiteBalancePreset(0)),
+            "White balance preset"
         );
     }
 
@@ -843,6 +858,9 @@ mod tests {
                 "Reset Exposure",
                 "Auto Exposure",
                 "Camera Brightness",
+                "As Shot",
+                "Auto White Balance",
+                "Daylight (LibRaw)",
                 "Next Channel",
                 "Previous Channel",
                 "Color",
@@ -927,6 +945,9 @@ mod tests {
             Some("Shift+Backspace"),
             Some("B"),
             Some("Shift+B"),
+            None,
+            Some("W"),
+            None,
             Some("N"),
             Some("Shift+N"),
             None,

@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T351](T351-white-balance-keys-menu-marks.md) | ADR 0027 W6: the key, the menu and the mark of the white balance (pw-loupe) | Open | Opus |
-| [T352](T352-click-on-gray-in-the-state.md) | ADR 0027 W6: the click on gray in the view core's state (pw-viewcore) | Blocked | Opus |
+| [T352](T352-click-on-gray-in-the-state.md) | ADR 0027 W6: the click on gray in the view core's state (pw-viewcore) | Open | Opus |
 | [T353](T353-pick-gray-keys-and-mode.md) | ADR 0027 W6: Pick Gray, the key, the menu item, the pick mode and its click (pw-loupe) | Blocked | Opus |
 
 ## Writing a task (owner and reviewer)

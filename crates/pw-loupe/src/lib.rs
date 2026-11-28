@@ -177,9 +177,9 @@ pub use shell::{
     SettingsPage, StartWindow, SubmenuKind, TEMPLATE_COLUMN_MIN_WIDTH, TEMPLATE_WINDOW_MIN,
     TEXT_CONTRAST, THEMES, Theme, UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes,
     clamp_column_width, column_width_range, companion_suffixes_field, contrast_ratio,
-    font_definitions, image_area, key_action_width, menu_items, menu_key, metadata_window_size,
-    non_text_pairs, palette, rect_on_a_screen, settings_window_size, start_window, take_key_press,
-    template_window_size, text_pairs, visuals,
+    font_definitions, image_area, image_context_entries, key_action_width, menu_items, menu_key,
+    metadata_window_size, non_text_pairs, palette, rect_on_a_screen, settings_window_size,
+    start_window, take_key_press, template_window_size, text_pairs, visuals,
 };
 pub use shell_text::{
     AboutText, KeyPageGroup, SettingsText, ShellText, about_text, command_text, exiftool_message,
@@ -530,6 +530,8 @@ pub enum PreviewKey {
     NextChannel,
     /// The previous channel in the preview (Shift+N, ADR 0027 W4-Q5).
     PreviousChannel,
+    /// `W`: auto white balance on ↔ As Shot (ADR 0027 W6-Q6).
+    AutoWhiteBalance,
     /// `Backspace`: every adjustment of the preview turned off (ADR 0027 A-Q3, W3-Q8, T318).
     ResetAdjustments,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
@@ -576,6 +578,7 @@ pub fn preview_key_action(
         (K::B, false, true, false) => Some(PreviewKey::CameraBrightness),
         (K::N, false, false, false) => Some(PreviewKey::NextChannel),
         (K::N, false, true, false) => Some(PreviewKey::PreviousChannel),
+        (K::W, false, false, false) => Some(PreviewKey::AutoWhiteBalance),
         (K::Backspace, false, false, false) => Some(PreviewKey::ResetAdjustments),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
@@ -1257,6 +1260,7 @@ mod tests {
                     Some(PreviewKey::CameraBrightness) => return Some(Command::CameraBrightness),
                     Some(PreviewKey::NextChannel) => return Some(Command::NextChannel),
                     Some(PreviewKey::PreviousChannel) => return Some(Command::PreviousChannel),
+                    Some(PreviewKey::AutoWhiteBalance) => return Some(Command::AutoWhiteBalance),
                     Some(PreviewKey::ResetAdjustments) => {
                         return Some(Command::ResetAdjustments);
                     }
@@ -2033,6 +2037,40 @@ mod tests {
             assert_eq!(command_of_key(chord, ViewMode::Loupe), command, "{chord:?}");
             assert_eq!(command_of_key(chord, ViewMode::Grid), None, "{chord:?}");
         }
+    }
+
+    #[test]
+    fn white_balance_uses_plain_w_in_the_preview_and_keeps_ctrl_w() {
+        use egui::Key::W;
+        let chord = KeyChord {
+            key: W,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(
+            preview_key_action(W, false, false, false),
+            Some(PreviewKey::AutoWhiteBalance)
+        );
+        assert_eq!(
+            command_of_key(chord, ViewMode::Loupe),
+            Some(Command::AutoWhiteBalance)
+        );
+        assert_eq!(command_of_key(chord, ViewMode::Grid), None);
+        assert_eq!(
+            preview_key_action(W, true, false, false),
+            Some(PreviewKey::Nothing)
+        );
+        assert_eq!(
+            command_of_key(
+                KeyChord {
+                    ctrl: true,
+                    ..chord
+                },
+                ViewMode::Grid
+            ),
+            Some(Command::CloseTab)
+        );
     }
 
     #[test]

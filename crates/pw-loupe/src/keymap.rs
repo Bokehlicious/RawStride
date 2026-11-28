@@ -109,6 +109,7 @@ pub enum KeyAction {
     CameraBrightness,
     NextChannel,
     PreviousChannel,
+    AutoWhiteBalance,
     ResetAdjustments,
     Compare,
     HoldImage,
@@ -171,7 +172,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 57] = [
+    pub const ALL: [KeyAction; 58] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -219,6 +220,7 @@ impl KeyAction {
         Self::CameraBrightness,
         Self::NextChannel,
         Self::PreviousChannel,
+        Self::AutoWhiteBalance,
         Self::ResetAdjustments,
         Self::Compare,
         Self::HoldImage,
@@ -286,6 +288,7 @@ impl KeyAction {
             Self::CameraBrightness => "camera_brightness",
             Self::NextChannel => "next_channel",
             Self::PreviousChannel => "previous_channel",
+            Self::AutoWhiteBalance => "auto_white_balance",
             Self::ResetAdjustments => "reset_adjustments",
             Self::Compare => "compare",
             Self::HoldImage => "hold_image",
@@ -351,6 +354,7 @@ impl KeyAction {
             | Self::CameraBrightness
             | Self::NextChannel
             | Self::PreviousChannel
+            | Self::AutoWhiteBalance
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -388,6 +392,7 @@ impl KeyAction {
             | Self::CameraBrightness
             | Self::NextChannel
             | Self::PreviousChannel
+            | Self::AutoWhiteBalance
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -450,6 +455,7 @@ impl KeyAction {
             Self::CameraBrightness => [with_shift(Key::B), None],
             Self::NextChannel => [plain(Key::N), None],
             Self::PreviousChannel => [with_shift(Key::N), None],
+            Self::AutoWhiteBalance => [plain(Key::W), None],
             Self::ResetAdjustments => [plain(Key::Backspace), None],
             Self::Compare => [plain(Key::C), None],
             Self::HoldImage => [plain(Key::K), None],
@@ -516,6 +522,7 @@ impl KeyAction {
             Command::CameraBrightness => Self::CameraBrightness,
             Command::NextChannel => Self::NextChannel,
             Command::PreviousChannel => Self::PreviousChannel,
+            Command::AutoWhiteBalance => Self::AutoWhiteBalance,
             Command::ResetAdjustments => Self::ResetAdjustments,
             Command::Compare => Self::Compare,
             Command::HoldImage => Self::HoldImage,
@@ -579,6 +586,7 @@ impl KeyAction {
             Self::CameraBrightness => Command::CameraBrightness,
             Self::NextChannel => Command::NextChannel,
             Self::PreviousChannel => Command::PreviousChannel,
+            Self::AutoWhiteBalance => Command::AutoWhiteBalance,
             Self::ResetAdjustments => Command::ResetAdjustments,
             Self::Compare => Command::Compare,
             Self::HoldImage => Command::HoldImage,
@@ -1130,7 +1138,7 @@ mod tests {
     use crate::orientations::rotation_key_action;
     use crate::ratings::{RatingKey, rating_key_action};
     // `menu_items()` holds every item of `MENUS`, its rating and label submenus included.
-    use crate::shell::{IMAGE_CONTEXT_MENU, MenuEntry, menu_items};
+    use crate::shell::{MenuEntry, image_context_entries, menu_items};
     use crate::{
         Action as ViewAction, MoveKey, PreviewKey, ShellAction, TabAction, delete_key_action,
         key_action, move_key_action, open_in_key_action, opens_import, preview_key_action,
@@ -1245,6 +1253,7 @@ mod tests {
                 PreviewKey::CameraBrightness => Action(A::CameraBrightness),
                 PreviewKey::NextChannel => Action(A::NextChannel),
                 PreviewKey::PreviousChannel => Action(A::PreviousChannel),
+                PreviewKey::AutoWhiteBalance => Action(A::AutoWhiteBalance),
                 PreviewKey::ResetAdjustments => Action(A::ResetAdjustments),
                 PreviewKey::Compare => Action(A::Compare),
                 PreviewKey::HoldImage => Action(A::HoldImage),
@@ -1460,9 +1469,9 @@ mod tests {
     fn every_menu_item_with_an_action_shows_its_default_first_key() {
         let map = KeyMap::default();
         let mut items = menu_items();
-        for entry in IMAGE_CONTEXT_MENU {
+        for entry in image_context_entries(true) {
             match entry {
-                MenuEntry::Item(item) => items.push(*item),
+                MenuEntry::Item(item) => items.push(item),
                 MenuEntry::Submenu(_, sub) => items.extend_from_slice(sub),
                 _ => {}
             }
@@ -1986,11 +1995,12 @@ mod tests {
             .position(|other| *other == KeyAction::FineDetails)
             .unwrap();
         assert_eq!(KeyAction::ALL[place + 1], KeyAction::Sharpening);
-        assert_eq!(KeyAction::ALL[place + 10], KeyAction::ResetAdjustments);
+        assert_eq!(KeyAction::ALL[place + 10], KeyAction::AutoWhiteBalance);
+        assert_eq!(KeyAction::ALL[place + 11], KeyAction::ResetAdjustments);
     }
 
     #[test]
-    fn exposure_shadows_and_channel_have_unique_default_keys_and_follow_sharpening() {
+    fn preview_adjustments_have_unique_default_keys_and_follow_sharpening() {
         let map = KeyMap::default();
         let actions = [
             (
@@ -2041,6 +2051,12 @@ mod tests {
                 with_shift(Key::N).unwrap(),
                 Command::PreviousChannel,
             ),
+            (
+                KeyAction::AutoWhiteBalance,
+                "auto_white_balance",
+                plain(Key::W).unwrap(),
+                Command::AutoWhiteBalance,
+            ),
         ];
         let place = KeyAction::ALL
             .iter()
@@ -2049,6 +2065,7 @@ mod tests {
         for (offset, (action, name, key, command)) in actions.into_iter().enumerate() {
             assert_eq!(KeyAction::ALL[place + 1 + offset], action);
             assert_eq!(action.name(), name);
+            assert_eq!(KeyAction::from_name(name), Some(action));
             assert_eq!(action.group(), KeyGroup::View);
             assert_eq!(action.acts_in(), KeyView::Preview);
             assert_eq!(action.default_keys(), [Some(key), None]);
@@ -2068,7 +2085,11 @@ mod tests {
         for key in [Key::ArrowUp, Key::ArrowDown] {
             assert_eq!(fixed_in_preview(with_ctrl(key).unwrap()), None);
         }
-        for chord in [plain(Key::N).unwrap(), with_shift(Key::N).unwrap()] {
+        for chord in [
+            plain(Key::N).unwrap(),
+            with_shift(Key::N).unwrap(),
+            plain(Key::W).unwrap(),
+        ] {
             assert_eq!(fixed_in_preview(chord), None);
         }
         use pw_viewcore::Channel;

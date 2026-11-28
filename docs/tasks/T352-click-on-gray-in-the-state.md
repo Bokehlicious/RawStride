@@ -1,4 +1,4 @@
-# T352. ADR 0027 W6: the click on gray in the view core's state — Blocked
+# T352. ADR 0027 W6: the click on gray in the view core's state — Open
 
 - **Why:** ADR 0027 §3.5 and W6-Q2, W6-Q3, W6-Q8 (answered by the owner 2026-11-28, ADR 0027
   §4.6). T349 gave the backend `grey_white_balance(session, area)` and the pure `grey_area`;
@@ -140,3 +140,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-28 | Blocked | Added (from the cold reads and the chain review of T350 and T351); waits for T350 |
+| 2026-11-28 | Open | T351 done; set to Open by the reviewer (the cold read and the chain review are above) |
