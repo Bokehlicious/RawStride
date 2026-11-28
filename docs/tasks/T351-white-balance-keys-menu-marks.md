@@ -5,7 +5,9 @@
   `ViewCore::set_white_balance` and `reset_white_balance`, `Frame::white_balance:
   WhiteBalanceState` with the mode, the base, the balance, the view's state, the file's preset
   names and `has_daylight`). This task lets the user use it: the key W, the submenu View ▸ White
-  Balance (with the current image's presets), the mark in the preview's row of adjustment marks,
+  Balance (with the current image's presets) and the same submenu in the preview's right-click
+  menu (owner, 2026-11-28: the preview has no menu bar, ADR 0017 U3-Q1; ADR 0027 §4.6 "Where the
+  menu is reached", ADR 0019 E-Q17), the mark in the preview's row of adjustment marks,
   both sides of the compare, and Reset Adjustments for it. **The click on gray (its key, its menu
   item, its mode and its click) is T353's.** The fourth task of W6's chain T348 → T349 → T350 →
   **T351** → T352 → T353; the owner's hand check of the auto balance, the daylight and the presets
@@ -31,13 +33,23 @@
     `MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS)`, then `ResetAdjustments`
     (Backspace); `acts_in`'s `Where::Loupe` list; the tests of the View menu's slices after Zoom
     at Pointer and after Fine Details (they count items: `anchor + 16` and `fine + 6` after T347,
-    about lines 2216 and 2368, both become one more with the new Submenu entry).
+    about lines 2216 and 2368, both become one more with the new Submenu entry). The right-click
+    menu (reviewer, 2026-11-28, after the owner's decision): `MenuEntry` (about line 945, with
+    `ExternalPrograms` and `Templates` as entries drawn from data) and `IMAGE_CONTEXT_MENU` (about
+    line 1206: … `Metadata`, `Templates`, `Separator`, `DeleteToRecycleBin`), one slice for the
+    contact sheet and the preview; its key test (about line 1271) and `keymap.rs`'s
+    `every_menu_item_with_an_action_shows_its_default_first_key` (about line 1463) walk its entries
+    with a `_` arm.
   - `main.rs`: `MenuEntry::Submenu(SubmenuKind, &'static [MenuItem])` is drawn generically by
     `menu_entry` (about line 9303); the closest model of a list built from data **inside a
     submenu** is `MenuEntry::Templates` / `templates_menu` (about line 9321: items by index from
     data, `ApplyTemplate(u16)`, `u16::try_from(index)`, a separator), not `ExternalPrograms` (a
     top-level entry); `menu_item` takes the text from `command_text(item.command)`, which has no
-    name to give for a preset. `PreviewExposure` ("Session adjustments shared by the current and
+    name to give for a preset. `menu_entry` matches `MenuEntry` exhaustively (`Filter | Sort =>
+    {}` for the entries the right-click menu does not draw); `image_context_menu` (about line 9355)
+    draws `IMAGE_CONTEXT_MENU` and is called from the contact sheet (about lines 4760 and 4824) and
+    from the preview (about line 10402, and 10486 on the compare's held side); `in_preview()`
+    (about line 6805). `PreviewExposure` ("Session adjustments shared by the current and
     held previews", `#[derive(Default)]`: `exposure_mode`, `shadows`, `channel`), with
     `toggle_shadows(repeat)`, `step_channel(forward, repeat)`, `set_channel(c)`, `reset(cores)`
     and `wish(…)` (sets both cores each frame: the first while the preview is shown, the second
@@ -110,6 +122,36 @@
      (LibRaw)" and the keys None, W, None, in the menu's order, before the Channel items),
      `every_fixed_text_of_the_shell` ("White Balance"), and the keymap test that asserts
      `ALL[place + n] == ResetAdjustments` (n grows by one).
+  2b. **The right-click menu** (owner, 2026-11-28; ADR 0027 §4.6 "Where the menu is reached", ADR
+     0019 E-Q17): the preview has no menu bar (ADR 0017 U3-Q1), so the same submenu White Balance
+     is also in the image's right-click menu **in the preview only** (on both sides of the
+     compare). In `shell.rs`: a new entry `MenuEntry::PreviewWhiteBalance` (doc comment: the
+     submenu White Balance and a separator, drawn only in the preview) in `IMAGE_CONTEXT_MENU`
+     between its last `Separator` and `DeleteToRecycleBin`, and a pure function
+     `image_context_entries(in_preview: bool) -> Vec<MenuEntry>`: `IMAGE_CONTEXT_MENU` with
+     `PreviewWhiteBalance` replaced by `MenuEntry::Submenu(SubmenuKind::WhiteBalance,
+     WHITE_BALANCE_ITEMS)` and `MenuEntry::Separator` when `in_preview`, and left out otherwise,
+     so the contact sheet's menu is exactly today's. `main.rs`: `image_context_menu` draws
+     `image_context_entries(self.in_preview())`, so the submenu goes through `menu_entry`'s
+     special case of point 2 (the static items, then the current image's presets) and the same
+     enabled and ticked rules; on the compare's held side the presets listed are the current
+     image's, as in the View menu. `menu_entry` gets an arm `MenuEntry::PreviewWhiteBalance =>
+     {}` beside `Filter | Sort` (it is never drawn directly); the other exhaustive matches on
+     `MenuEntry` get it too: `menu_items()` (`shell.rs` about line 1226, with the entries that hold
+     no menu-bar item) and `draw_menu_bar` (`main.rs` about lines 9239–9287, never in the menu
+     bar). The doc comments of `IMAGE_CONTEXT_MENU` (about line 1200) and `image_context_menu`
+     (about line 9351) say that the submenu is drawn in the preview only. These existing tests are
+     **updated** (asked for here, not a weakening, rule 5): the two that check the keys of the
+     right-click menu's items (`shell.rs` `the_default_map_gives_every_menu_item_its_old_key`, about
+     line 1268, and `keymap.rs` `every_menu_item_with_an_action_shows_its_default_first_key`, about
+     line 1463) walk `image_context_entries(true)` instead, so the white balance items' keys are
+     checked too; `the_image_context_menu_holds_the_image_commands_in_order` (about line 1962)
+     gets `MenuEntry::PreviewWhiteBalance` in its expected slice between the last `Separator` and
+     `DeleteToRecycleBin`; `every_item_of_the_image_context_menu_is_the_menu_bars_item` (about
+     line 2010) keeps walking `IMAGE_CONTEXT_MENU` and treats `PreviewWhiteBalance` as
+     `Templates` (in the arm about line 2048, its doc comment naming it: the submenu is the View
+     menu's, not the Image menu's). The View menu keeps its submenu (point 2); it is drawn only
+     outside the preview, so its items stay greyed there, as Exposure's and Channel's do.
   3. **The state the shell holds** (A-Q2, W6-Q6): `white_balance: WbMode` (`Shot` at the start,
      never `Grey`) and `wb_sent: [Option<WbMode>; 2]` (what the shell last set on each core) in
      `PreviewExposure`, not in `ShellSettings` (not saved), so it can be tested as the exposure's
@@ -179,7 +221,7 @@
        `frame.white_balance` and the key, filled where `shadows_key` is (`ImageAreaShown`).
   6. **The glossary** (rule 13): rows "White balance, Auto White Balance, As Shot, Daylight
      (LibRaw), white balance preset" (the preview's balance for RAW mode, ADR 0027 §3.5: the key
-     W, the menu View ▸ White Balance, the marks "WB auto" and so on, what each means in one
+     W, the submenu White Balance in the preview's right-click menu and in the View menu, the marks "WB auto" and so on, what each means in one
      sentence, that the histogram and the overlays stay as shot, that a preset is the file's own,
      and that "Daylight (LibRaw)" is LibRaw's own daylight multipliers for every RAW file), and the
      changed row "Reset Adjustments" (the white balance too).
@@ -193,7 +235,10 @@
   - `shell.rs`: the View menu has the submenu "White Balance" with the three static commands in
     order between Exposure and Channel; the four commands act in the preview only;
     `WhiteBalancePreset`, `WhiteBalanceDaylight` and `WhiteBalanceShot` have no key and no
-    `KeyAction`.
+    `KeyAction`; `image_context_entries(false)` equals today's contact-sheet list (every entry of
+    `IMAGE_CONTEXT_MENU` but `PreviewWhiteBalance`, in order) and `image_context_entries(true)`
+    has `Templates`, `Separator`, the submenu White Balance with `WHITE_BALANCE_ITEMS`,
+    `Separator`, `DeleteToRecycleBin` at its end.
   - `shell_text.rs`: the new menu texts in order (point 2), `submenu_text`, and the placeholder.
   - `main.rs`, on `PreviewExposure` and pure functions without a window: `toggle_auto_white_
     balance` with `effective` `Auto` gives `Shot`, with `Shot` and with `Grey` gives `Auto`, a
@@ -228,3 +273,5 @@
 | 2026-11-28 | Blocked | Added (as T351 with the pick mode); waits for T350 |
 | 2026-11-28 | Blocked | Cold read and chain review: the pick mode split out to T353; `wish` redesigned (per-core `wb_sent`, the pure `wb_to_send`, the toggle from the frame's mode); the preset list drawn as `templates_menu` is, with a placeholder `command_text`; the tests through pure functions (no test backend in `pw-loupe`); `last_white_balance` on `Loupe`; the ninth parameter of `adjustment_marks` and its eleven call sites; "gray" spelling; paused sentences without numbers; integer rounding of the multipliers; the test names and counts |
 | 2026-11-28 | Open | T350 done; set to Open by the reviewer (the cold read and the chain review are above) |
+| 2026-11-28 | Open | The owner's decision (2026-11-28, asked by the task agent before it started: the preview has no menu bar, U3-Q1): the submenu White Balance also in the preview's right-click menu, before Delete to Recycle Bin; written into ADR 0027 §4.6 and ADR 0019 §2.9 / E-Q17; point 2b and its tests added, the files checked; Exposure and Channel stay out (backlog, W6's hand check). Cold read of the changed text: see the next row |
+| 2026-11-28 | Open | Cold read of the changed text (point 2b, one fresh agent): the names and lines hold, `in_preview()` is true for both sides of the compare and false in the contact sheet, a `Submenu` from a `Vec` reaches `menu_entry`'s special case; added the two other exhaustive matches (`menu_items`, `draw_menu_bar`), the two tests not named (`the_image_context_menu_holds_the_image_commands_in_order`, `every_item_of_the_image_context_menu_is_the_menu_bars_item`), the doc comments, and that the View menu's submenu stays greyed outside the preview |

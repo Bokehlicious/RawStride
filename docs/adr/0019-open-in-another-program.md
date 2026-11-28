@@ -117,7 +117,11 @@
   Reject, Move to Picked, the setting "Move Rejected and Picked Images to Subfolders"; then, after
   a separator, Rotate Left and Rotate Right as before).
   **Later (owner, 2026-11-19):** when metadata templates exist (ADR 0017 U13), the menu also gets
-  a submenu to apply a template to the images, after Metadata…; not part of E4. Left out: the setting "Move Rejected and Picked Images to Subfolders", RAW ↔ JPEG
+  a submenu to apply a template to the images, after Metadata…; not part of E4.
+  **Added by the owner (2026-11-28, ADR 0027 W6, T351):** in the preview only (and on both sides
+  of the compare), the submenu White Balance after the template submenu, set off by a separator,
+  before Delete to Recycle Bin; it sets the session's white balance (ADR 0027 §4.6), not a value
+  of the image clicked. The contact sheet's right-click menu is unchanged. Left out: the setting "Move Rejected and Picked Images to Subfolders", RAW ↔ JPEG
   and "Delete Rejected Images", which act on the folder or the view, not on the images clicked.
 - **How it looks** (E-Q18): the same texts as the menu bar, each command's key shown on the right
   and greyed by the same rules (a missing program, no current image, Move to Picked while the
@@ -150,7 +154,7 @@ written out and the later template submenu):
 |---|---|---|
 | E-Q15 | Where the right-click menu is | On an image in the contact sheet and on the image in the preview (and the compare); not on empty space |
 | E-Q16 | Which images it acts on | The image clicked becomes the current one and the marking is kept: a marked image → all the marked, an image not marked → that image alone; the preview → the current image |
-| E-Q17 | What it holds | Open in {name} per program, Show in File Explorer; Rating, Reject, Move to Picked, Label with the colours; Metadata…; Delete to Recycle Bin. Later, with ADR 0017 U13: a submenu to apply a metadata template (owner, 2026-11-19) |
+| E-Q17 | What it holds | Open in {name} per program, Show in File Explorer; Rating, Reject, Move to Picked, Label with the colours; Metadata…; Delete to Recycle Bin. Later, with ADR 0017 U13: a submenu to apply a metadata template (owner, 2026-11-19). In the preview only: the submenu White Balance before Delete to Recycle Bin (owner, 2026-11-28, ADR 0027 W6) |
 | E-Q18 | How it looks | Same texts as the menu bar, keys on the right, greyed by the same rules, drawn from the same entries |
 | E-Q19 | Step | One step E4 (one task in the shell), with the owner's hand check after it |
 

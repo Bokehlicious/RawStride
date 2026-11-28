@@ -44,7 +44,9 @@
      group View, acting in the preview, a `PreviewKey` for Shift+W, and the arms in `command_of_key`,
      `today()`, `key_map_action` and `run_command`; listed in `acts_in`'s `Where::Loupe` list.
   2. **The menu item:** "Pick Gray" (Shift+W) is added to `WHITE_BALANCE_ITEMS` **after** Daylight
-     (LibRaw) and before the file's presets. `command_enabled`: in the preview only and only when
+     (LibRaw) and before the file's presets, so it is also in the preview's right-click menu
+     (T351 point 2b, owner 2026-11-28; a click on it starts the pick mode, the next left click on
+     the image measures). `command_enabled`: in the preview only and only when
      the current frame's `white_balance.can_pick`; `command_checked` (T351's `wb_checked`) ticks it
      while the frame's mode is `Grey`. The key path does not go through `command_enabled`, so the
      key is refused the same way: `toggle_pick` does nothing when `can_pick` is false (a JPEG
@@ -93,7 +95,7 @@
      preview and the compare stay open). Enter still closes the preview, which also ends the mode
      (point 3).
   7. **The glossary** (rule 13): rows "Pick Gray, click on gray" (the preview's way to set the white
-     balance from a neutral area: Shift+W or View ▸ White Balance ▸ Pick Gray, then one click on
+     balance from a neutral area: Shift+W or White Balance ▸ Pick Gray in the right-click menu, then one click on
      the image; the program measures a small square of the RAW data there; the mark reads "WB
      gray"; it applies to this image only and ends when another image is shown, ADR 0027 §3.5,
      W6-Q2), and the changed rows "White balance, …" (T351; Pick Gray named) and "Reset

@@ -796,6 +796,16 @@ that is all deep shadow, so that a dim or bright area does not skew a colour's m
 passed to LibRaw with `use_camera_wb` off (LibRaw otherwise puts the camera's own multipliers
 over a `user_mul`).
 
+**Where the menu is reached (owner, 2026-11-28, at T351):** the preview has no menu bar (ADR 0017
+U3-Q1), so View ▸ White Balance alone could not be used where the balance acts, and As Shot,
+Daylight (LibRaw) and the file's presets have no key. The submenu **White Balance** (the same
+items, the presets and, with T353, Pick Gray) is therefore also in the image's **right-click menu,
+in the preview only** (the compare's two sides too), after the template submenu and before Delete
+to Recycle Bin, each group set off by a separator; the contact sheet's right-click menu is
+unchanged (ADR 0019 §2.9, E-Q17). U3-Q1 stays as it is. The View menu keeps the submenu, as it
+keeps Exposure and Channel. Exposure and Channel stay out of the right-click menu for now (they
+have keys for every item); whether they join it is taken up at W6's hand check (backlog).
+
 **Cost with everything off (owner, 2026-11-28, asked before approving):** the only thing W6 does
 with every adjustment off is read the file's presets when it is opened (W6-Q4). The first task
 therefore reports the time of that read itself (the shim times it), and the reviewer records
