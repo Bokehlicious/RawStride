@@ -1,4 +1,4 @@
-# T351. ADR 0027 W6: the key, the menu and the mark of the white balance — Blocked
+# T351. ADR 0027 W6: the key, the menu and the mark of the white balance — Open
 
 - **Why:** ADR 0027 §2.1, §3.5 and W6-Q4, W6-Q6, W6-Q8 (answered by the owner 2026-11-28, ADR 0027
   §4.6). T350 gave the view core the white balance's mode (`pw_viewcore::WbMode`,
@@ -227,3 +227,4 @@
 |---|---|---|
 | 2026-11-28 | Blocked | Added (as T351 with the pick mode); waits for T350 |
 | 2026-11-28 | Blocked | Cold read and chain review: the pick mode split out to T353; `wish` redesigned (per-core `wb_sent`, the pure `wb_to_send`, the toggle from the frame's mode); the preset list drawn as `templates_menu` is, with a placeholder `command_text`; the tests through pure functions (no test backend in `pw-loupe`); `last_white_balance` on `Loupe`; the ninth parameter of `adjustment_marks` and its eleven call sites; "gray" spelling; paused sentences without numbers; integer rounding of the multipliers; the test names and counts |
+| 2026-11-28 | Open | T350 done; set to Open by the reviewer (the cold read and the chain review are above) |

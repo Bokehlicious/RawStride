@@ -8,11 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pw_viewcore::{
-    AdjustState, Backend, Config, DecodeError, ExposureBase, ExposureMode, FineState, Frame,
-    ImageSize, Rect, Rgb, Source, Status, ViewCore, ViewKind, ViewOut, Zoom,
+    AdjustState, Backend, Config, DecodeError, Ev, ExposureBase, ExposureMode, FineState, Frame,
+    ImageSize, Rect, Rgb, Source, Status, Stop, ViewCore, ViewKind, ViewOut, Wb, WbBase, WbMode,
+    Zoom,
 };
 
 const VIEW: [u32; 2] = [1000, 800];
+const AUTO_WB: Wb = Wb::Mul { r: 2000, b: 1500 };
 
 /// Simulated files. RAW: "bad*" fails as damaged, the rest are 4000×3000 (flip 6 for "v*").
 /// JPEG: "nojpeg*" has no embedded JPEG, the rest have a 1600×1200 one. Every pixel encodes its
@@ -21,7 +23,18 @@ const VIEW: [u32; 2] = [1000, 800];
 struct Fake {
     opens: Arc<AtomicUsize>,
     renders: Arc<Mutex<Vec<(ViewKind, Rect)>>>,
+    balances: Arc<AtomicUsize>,
+    render_balances: Arc<Mutex<Vec<(Wb, usize)>>>,
     delay: Duration,
+}
+
+impl Fake {
+    fn record_balance_at_render(&self, wb: Wb) {
+        self.render_balances
+            .lock()
+            .unwrap()
+            .push((wb, self.balances.load(Ordering::SeqCst)));
+    }
 }
 
 fn pixel(x: u32, y: u32) -> [u8; 3] {
@@ -86,6 +99,34 @@ impl Backend for Fake {
             height: r.h,
             data,
         })
+    }
+
+    fn render_half_stoppable(
+        &self,
+        session: &mut Self::Session,
+        _exposure: Ev,
+        wb: Wb,
+        _stop: &Stop,
+    ) -> Result<Rgb, DecodeError> {
+        self.record_balance_at_render(wb);
+        self.render_half(session)
+    }
+
+    fn render_region_stoppable(
+        &self,
+        session: &mut Self::Session,
+        rect: Rect,
+        _exposure: Ev,
+        wb: Wb,
+        _stop: &Stop,
+    ) -> Result<Rgb, DecodeError> {
+        self.record_balance_at_render(wb);
+        self.render_region(session, rect)
+    }
+
+    fn auto_white_balance(&self, _session: &mut Self::Session) -> Option<Wb> {
+        self.balances.fetch_add(1, Ordering::SeqCst);
+        Some(AUTO_WB)
     }
 }
 
@@ -152,6 +193,29 @@ fn start(fake: Fake, config: Config) -> ViewCore<Fake> {
         Ok(c) => c,
         Err(e) => panic!("start: {e}"),
     }
+}
+
+#[test]
+fn auto_white_balance_runs_before_the_first_view_is_rendered() {
+    let fake = Fake::default();
+    let config = Config {
+        dwell: WAIT * 2,
+        ..Config::default()
+    };
+    let core = start(fake.clone(), config);
+    assert!(core.set_white_balance(WbMode::Auto));
+    core.open_folder(files(&["a.raw"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, ready);
+    assert_eq!(f.status, Status::Ready);
+    assert_eq!(f.white_balance.base, WbBase::Auto);
+    assert_eq!(f.white_balance.view, AdjustState::Shown);
+    assert_eq!(screen.textures[&f.draw.unwrap().id].wb, AUTO_WB);
+    assert_eq!(
+        fake.render_balances.lock().unwrap().first(),
+        Some(&(AUTO_WB, 1))
+    );
+    assert_eq!(fake.balances.load(Ordering::SeqCst), 1);
 }
 
 #[test]

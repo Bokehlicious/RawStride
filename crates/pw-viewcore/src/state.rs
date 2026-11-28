@@ -14,7 +14,7 @@ use crate::channel::Channel;
 use crate::exposure::{AutoExposure, Ev, auto_exposure};
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
-use crate::wb::Wb;
+use crate::wb::{Wb, WbInfo, WbPreset};
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
 /// command line (ADR 0009 §11).
@@ -130,6 +130,8 @@ pub struct ViewOut {
     pub shadows: Option<u8>,
     /// The channel used to render this view (ADR 0027 §3.6, W4).
     pub channel: Channel,
+    /// The white balance used to render this view (ADR 0027 §3.5, W6).
+    pub wb: Wb,
     pub image: Rgb,
     /// FNV-1a over the pixels, only when recording (correctness checks).
     pub hash: Option<u64>,
@@ -153,6 +155,8 @@ pub struct Resident {
     pub shadows: Option<u8>,
     /// The channel used to render this view (ADR 0027 §3.6, W4).
     pub channel: Channel,
+    /// The white balance used to render this view (ADR 0027 §3.5, W6).
+    pub wb: Wb,
     pub bytes: u64,
     pub used: u64,
     pub hash: Option<u64>,
@@ -325,6 +329,61 @@ pub struct ExposureState {
     pub view: AdjustState,
 }
 
+/// The session's white balance mode (ADR 0027 W6).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum WbMode {
+    #[default]
+    Shot,
+    Auto,
+    Daylight,
+    Preset(String),
+    Grey,
+}
+
+/// The availability of the selected balance for the current image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WbBase {
+    Shot,
+    Auto,
+    AutoNone,
+    AutoWaiting,
+    Daylight,
+    DaylightNone,
+    Preset(String),
+    PresetNone(String),
+    Grey,
+}
+
+/// The current image's white balance and whether the frame shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhiteBalanceState {
+    pub mode: WbMode,
+    pub base: WbBase,
+    pub wb: Wb,
+    pub view: AdjustState,
+    pub presets: Arc<[WbPreset]>,
+    pub has_daylight: bool,
+}
+
+impl WhiteBalanceState {
+    pub fn off() -> Self {
+        Self {
+            mode: WbMode::Shot,
+            base: WbBase::Shot,
+            wb: Wb::Shot,
+            view: AdjustState::Off,
+            presets: Arc::default(),
+            has_daylight: false,
+        }
+    }
+}
+
+impl Default for WhiteBalanceState {
+    fn default() -> Self {
+        Self::off()
+    }
+}
+
 /// The state of sharpening for the current image (ADR 0027 §3.3, W3), for the shell's mark.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SharpenState {
@@ -383,6 +442,8 @@ pub struct Frame {
     pub shadows: AdjustState,
     /// The state of the channel view for the current image (ADR 0027 §3.6, W4).
     pub channel: AdjustState,
+    /// The state of white balance for the current image (ADR 0027 §3.5, W6).
+    pub white_balance: WhiteBalanceState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -417,6 +478,9 @@ pub struct Stats {
     /// How many times an image's statistics were asked of the backend, and how long each took.
     pub statistics: u64,
     pub statistics_ms: Vec<f64>,
+    /// How many times auto white balance was asked of the backend, and how long each took.
+    pub balances: u64,
+    pub balance_ms: Vec<f64>,
     /// How many times an image's clipping map was asked of the backend, and how long each took.
     pub clipping_maps: u64,
     pub clipping_ms: Vec<f64>,
@@ -486,6 +550,7 @@ struct Look {
     exposure: Ev,
     shadows: Option<u8>,
     channel: Channel,
+    wb: Wb,
 }
 
 impl Resident {
@@ -495,6 +560,7 @@ impl Resident {
             exposure: self.exposure,
             shadows: self.shadows,
             channel: self.channel,
+            wb: self.wb,
         }
     }
 }
@@ -506,6 +572,7 @@ impl ViewOut {
             exposure: self.exposure,
             shadows: self.shadows,
             channel: self.channel,
+            wb: self.wb,
         }
     }
 }
@@ -517,6 +584,7 @@ impl JobView {
             exposure: self.exposure,
             shadows: self.shadows,
             channel: self.channel,
+            wb: self.wb,
         }
     }
 
@@ -555,6 +623,8 @@ pub(crate) enum Job {
     Render(Key, JobView),
     /// The statistics of an opened image (ADR 0017 U7-Q6).
     Statistics(Key),
+    /// The auto white balance of an opened RAW image (ADR 0027 W6).
+    Balance(Key),
     /// The clipping map of an opened image (ADR 0017 U7b-Q8).
     Clipping(Key),
     /// The focus map of an opened image, from its half-size render (ADR 0017 U9a).
@@ -567,17 +637,17 @@ impl Job {
             Job::Open(k)
             | Job::Render(k, _)
             | Job::Statistics(k)
+            | Job::Balance(k)
             | Job::Clipping(k)
             | Job::Focus(k) => k,
         }
     }
 }
 
-/// What a session lent for its statistics, its clipping map or its focus map is booked under where
-/// a lent session is booked by the view it renders (`lent_paths`, `released`): no view, which no
-/// render job has. The three share it: an image's session is lent to one job at a time, and no new
-/// session of the image is opened while a job of it runs, so no two of them are ever booked at
-/// the same time.
+/// What a session lent for its statistics, auto white balance, clipping map or focus map is booked
+/// under in `lent_paths` and `released`: a placeholder no render job uses. These jobs share it:
+/// an image's session is lent to one job at a time, and no new session of the image is opened
+/// while a job of it runs, so no two of them are ever booked at the same time.
 const STATISTICS_LEND: JobView = JobView {
     kind: ViewKind::Half,
     region: Rect::new(0, 0, 0, 0),
@@ -649,6 +719,11 @@ pub(crate) enum Task<S> {
         key: Key,
         session: S,
     },
+    Balance {
+        generation: u64,
+        key: Key,
+        session: S,
+    },
     Clipping {
         generation: u64,
         key: Key,
@@ -676,6 +751,12 @@ pub fn is_shown_as_itself(path: &std::path::Path) -> bool {
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
     })
+}
+
+#[derive(Debug)]
+pub(crate) enum AutoWb {
+    Available(Wb),
+    Unavailable,
 }
 
 /// The core's state.
@@ -709,6 +790,7 @@ pub(crate) struct State<S> {
     /// back without opening the file again. Inserted, cleared and moved where `sizes` is.
     own_flips: HashMap<Key, u8>,
     camera_ev: HashMap<Key, Option<f64>>,
+    wb_info: HashMap<Key, WbInfo>,
     /// The orientations told by the shell, by path (ADR 0024 §2.4: an XMP orientation is used
     /// before the file's own). Not cleared by a new folder or list of files: the shell sends a
     /// value once (T232).
@@ -719,6 +801,7 @@ pub(crate) struct State<S> {
     /// The statistics of the opened images that were asked for them (ADR 0017 U7-Q6): once per
     /// image and display mode. Kept, cleared and moved like `sizes`.
     pub statistics: HashMap<Key, ImageStatistics>,
+    wb_auto: HashMap<Key, AutoWb>,
     /// An overlay wants the current image's clipping map (ADR 0017 U7b-Q8). Set by the shell;
     /// a new folder or list of files does not change it.
     pub clipping_wanted: bool,
@@ -752,6 +835,7 @@ pub(crate) struct State<S> {
     exposure_steps: i32,
     shadows: Option<u8>,
     channel: Channel,
+    wb_mode: WbMode,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -825,9 +909,11 @@ impl<S> State<S> {
             sizes: HashMap::new(),
             own_flips: HashMap::new(),
             camera_ev: HashMap::new(),
+            wb_info: HashMap::new(),
             orientations: HashMap::new(),
             profile_unusable: HashSet::new(),
             statistics: HashMap::new(),
+            wb_auto: HashMap::new(),
             clipping_wanted: false,
             clipping_maps: Vec::new(),
             clipping_none: HashSet::new(),
@@ -841,6 +927,7 @@ impl<S> State<S> {
             exposure_steps: 0,
             shadows: None,
             channel: Channel::Color,
+            wb_mode: WbMode::Shot,
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -1023,6 +1110,19 @@ impl<S> State<S> {
         true
     }
 
+    pub fn set_white_balance(&mut self, mode: WbMode) -> bool {
+        if mode == WbMode::Grey || self.wb_mode == mode {
+            return false;
+        }
+        self.wb_mode = mode;
+        self.since = Instant::now();
+        true
+    }
+
+    pub fn reset_white_balance(&mut self) -> bool {
+        self.set_white_balance(WbMode::Shot)
+    }
+
     fn set_steps(&mut self, steps: i32) -> bool {
         if self.exposure_steps == steps {
             return false;
@@ -1091,10 +1191,37 @@ impl<S> State<S> {
         }
     }
 
-    fn waiting_for_auto(&self, key: Key) -> bool {
+    fn waiting_for_auto_exposure(&self, key: Key) -> bool {
         self.exposure_mode == ExposureMode::Auto
             && key.1 == Source::Raw
             && !self.statistics.contains_key(&key)
+    }
+
+    fn waiting_for_auto(&self, key: Key) -> bool {
+        self.waiting_for_auto_exposure(key) || self.wb_of(key).is_none()
+    }
+
+    fn wb_of(&self, key: Key) -> Option<Wb> {
+        if self.wb_mode == WbMode::Shot || key.1 != Source::Raw {
+            return Some(Wb::Shot);
+        }
+        Some(match &self.wb_mode {
+            WbMode::Shot | WbMode::Grey => Wb::Shot,
+            WbMode::Auto => match self.wb_auto.get(&key)? {
+                AutoWb::Available(wb) => *wb,
+                AutoWb::Unavailable => Wb::Shot,
+            },
+            WbMode::Daylight => self
+                .wb_info
+                .get(&key)
+                .and_then(|info| info.daylight)
+                .unwrap_or(Wb::Shot),
+            WbMode::Preset(name) => self
+                .wb_info
+                .get(&key)
+                .and_then(|info| info.presets.iter().find(|preset| preset.name == *name))
+                .map_or(Wb::Shot, |preset| preset.wb),
+        })
     }
 
     fn shadows_of(&self, key: Key) -> Option<u8> {
@@ -1212,8 +1339,10 @@ impl<S> State<S> {
         self.sizes.clear();
         self.own_flips.clear();
         self.camera_ev.clear();
+        self.wb_info.clear();
         self.profile_unusable.clear();
         self.statistics.clear();
+        self.wb_auto.clear();
         self.clipping_maps.clear();
         self.clipping_none.clear();
         self.focus_maps.clear();
@@ -1320,6 +1449,11 @@ impl<S> State<S> {
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
+        self.wb_info = self
+            .wb_info
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
         self.own_flips = self
             .own_flips
             .drain()
@@ -1328,6 +1462,11 @@ impl<S> State<S> {
         self.profile_unusable = self.profile_unusable.drain().filter_map(to).collect();
         self.statistics = self
             .statistics
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
+        self.wb_auto = self
+            .wb_auto
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
@@ -1581,7 +1720,7 @@ impl<S> State<S> {
                         density_q: quantise(scale),
                         sharpen: self.sharpening,
                         exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
-                        wb: Wb::Shot,
+                        wb: self.wb_of(key).unwrap_or(Wb::Shot),
                         shadows: self.shadows_of(key),
                         channel: self.channel,
                     },
@@ -1603,7 +1742,7 @@ impl<S> State<S> {
                     // 0027 A-Q8, W3-Q1, changed 2026-11-25)
                     sharpen: self.sharpening,
                     exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
-                    wb: Wb::Shot,
+                    wb: self.wb_of(key).unwrap_or(Wb::Shot),
                     shadows: self.shadows_of(key),
                     channel: self.channel,
                 };
@@ -1639,7 +1778,7 @@ impl<S> State<S> {
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
-                wb: Wb::Shot,
+                wb: self.wb_of(key).unwrap_or(Wb::Shot),
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1650,7 +1789,7 @@ impl<S> State<S> {
                 density_q: quantise(HALF_DENSITY),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
-                wb: Wb::Shot,
+                wb: self.wb_of(key).unwrap_or(Wb::Shot),
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1662,7 +1801,7 @@ impl<S> State<S> {
                 density_q: quantise(1.0),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
-                wb: Wb::Shot,
+                wb: self.wb_of(key).unwrap_or(Wb::Shot),
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1673,7 +1812,7 @@ impl<S> State<S> {
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
-                wb: Wb::Shot,
+                wb: self.wb_of(key).unwrap_or(Wb::Shot),
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1863,7 +2002,7 @@ impl<S> State<S> {
                 continue;
             }
             if !self.sessions.contains_key(&key) {
-                // Even a served view needs a session when its RAW statistics are due.
+                // A served view can still need a session for auto exposure or white balance.
                 if !self.waiting_for_auto(key)
                     && let Some(req) = self.req(key, want)
                     && self.satisfied(&req, want)
@@ -1875,8 +2014,14 @@ impl<S> State<S> {
                 }
                 continue;
             }
-            if self.waiting_for_auto(key) {
-                let job = Job::Statistics(key);
+            let prerequisite = if self.waiting_for_auto_exposure(key) {
+                Some(Job::Statistics(key))
+            } else if self.wb_of(key).is_none() {
+                Some(Job::Balance(key))
+            } else {
+                None
+            };
+            if let Some(job) = prerequisite {
                 if !v.iter().any(|(j, _)| *j == job) {
                     v.push((job, Vec::new()));
                 }
@@ -1914,7 +2059,10 @@ impl<S> State<S> {
     /// them.
     fn statistics_job(&self) -> Option<Job> {
         let key = self.cur_key()?;
-        if self.statistics.contains_key(&key) || self.failed.contains_key(&key) {
+        if self.statistics.contains_key(&key)
+            || self.failed.contains_key(&key)
+            || self.wb_of(key).is_none()
+        {
             return None;
         }
         if self.in_gesture() || self.since.elapsed() < self.config.dwell {
@@ -2501,7 +2649,7 @@ impl<S> State<S> {
                         return Some(task);
                     }
                 }
-                Job::Statistics(key) => {
+                Job::Statistics(key) | Job::Balance(key) => {
                     let Some(slot) = self.sessions.get_mut(&key) else {
                         continue;
                     };
@@ -2514,10 +2662,18 @@ impl<S> State<S> {
                     }
                     self.lent.insert(key, generation);
                     self.running.insert((generation, job));
-                    return Some(Task::Statistics {
-                        generation,
-                        key,
-                        session,
+                    return Some(if matches!(job, Job::Balance(_)) {
+                        Task::Balance {
+                            generation,
+                            key,
+                            session,
+                        }
+                    } else {
+                        Task::Statistics {
+                            generation,
+                            key,
+                            session,
+                        }
                     });
                 }
                 Job::Clipping(key) => {
@@ -2623,13 +2779,15 @@ impl<S> State<S> {
             session_bytes,
             |_| false,
             |_| None,
+            |_| WbInfo::default(),
             ms,
         );
     }
 
-    /// [`State::finish_open`], and `profile_unusable` (the backend's
-    /// [`profile_unusable`](crate::backend::Backend::profile_unusable)) is asked of the session
-    /// after a successful open whose result is stored (ADR 0016 §5).
+    /// [`State::finish_open`], with per-file values read from the session after a successful open
+    /// whose result is stored: `profile_unusable` (the backend's
+    /// [`profile_unusable`](crate::backend::Backend::profile_unusable), ADR 0016 §5),
+    /// `camera_exposure` and `white_balance` (the file's white balance information, ADR 0027 W6).
     #[allow(clippy::too_many_arguments)]
     pub fn finish_open_checked(
         &mut self,
@@ -2639,6 +2797,7 @@ impl<S> State<S> {
         session_bytes: impl Fn(ImageSize, Source) -> u64,
         profile_unusable: impl Fn(&S) -> bool,
         camera_exposure: impl Fn(&S) -> Option<f64>,
+        white_balance: impl Fn(&S) -> WbInfo,
         ms: f64,
     ) {
         self.running.remove(&(generation, Job::Open(key)));
@@ -2652,6 +2811,7 @@ impl<S> State<S> {
                 let bytes = session_bytes(size, key.1);
                 self.own_flips.insert(key, size.flip);
                 self.camera_ev.insert(key, camera_exposure(&session));
+                self.wb_info.insert(key, white_balance(&session));
                 let flip = self.told_flip(key).unwrap_or(size.flip);
                 self.sizes.insert(key, ImageSize { flip, ..size });
                 if profile_unusable(&session) {
@@ -2776,6 +2936,7 @@ impl<S> State<S> {
                         exposure: view.exposure,
                         shadows: view.shadows,
                         channel: view.channel,
+                        wb: view.wb,
                         image,
                         hash,
                     });
@@ -2801,6 +2962,7 @@ impl<S> State<S> {
                     exposure: view.exposure,
                     shadows: view.shadows,
                     channel: view.channel,
+                    wb: view.wb,
                     image,
                     hash,
                 });
@@ -2907,6 +3069,36 @@ impl<S> State<S> {
             None => ImageStatistics::Unavailable,
         };
         self.statistics.insert(key, statistics);
+    }
+
+    /// Keeps the auto balance for the image when its loan ends, even across a metadata release.
+    /// An unusable session is discarded so the next job can try again with a fresh one.
+    pub fn finish_balance(
+        &mut self,
+        generation: u64,
+        key: Key,
+        session: S,
+        result: Option<Wb>,
+        usable: bool,
+        ms: f64,
+    ) {
+        self.running.remove(&(generation, Job::Balance(key)));
+        self.stats.balances += 1;
+        self.stats.balance_ms.push(ms);
+        let released = self
+            .released
+            .contains_key(&(generation, key, STATISTICS_LEND));
+        if !self.return_session(generation, key, STATISTICS_LEND, session) {
+            return;
+        }
+        if !usable {
+            if !released {
+                self.drop_session(key);
+            }
+            return;
+        }
+        self.wb_auto
+            .insert(key, result.map_or(AutoWb::Unavailable, AutoWb::Available));
     }
 
     /// The clipping map of an opened image was made (`ms` = how long it took; `None` = the file
@@ -3030,6 +3222,7 @@ impl<S> State<S> {
             && Some(out.exposure) == self.exposure_of(key)
             && out.shadows == self.shadows_of(key)
             && out.channel == self.channel
+            && Some(out.wb) == self.wb_of(key)
         {
             // it replaces the image's fine view of another look, which may be evicted for
             // it although it is drawn (ADR 0027 W3-Q4; counted as free when it was planned); a
@@ -3072,6 +3265,7 @@ impl<S> State<S> {
             exposure: out.exposure,
             shadows: out.shadows,
             channel: out.channel,
+            wb: out.wb,
             bytes,
             used: self.tick,
             hash: out.hash,
@@ -3166,6 +3360,7 @@ impl<S> State<S> {
             },
             shadows: AdjustState::Off,
             channel: AdjustState::Off,
+            white_balance: self.white_balance_of(key),
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -3200,6 +3395,7 @@ impl<S> State<S> {
             self.last_vis = None;
         }
         let ready = self.req(key, Want::Shown).and_then(|req| {
+            self.wb_of(key)?;
             let size = *self.sizes.get(&key)?;
             let scale = self.scale_of(key)?;
             let r = self.serving(&req)?;
@@ -3225,7 +3421,9 @@ impl<S> State<S> {
             }
             None => {
                 let since = *self.waiting_since.get_or_insert_with(Instant::now);
-                if let Some((draw, vis)) = self.gesture_stand_in(key, view_px) {
+                if self.wb_of(key).is_some()
+                    && let Some((draw, vis)) = self.gesture_stand_in(key, view_px)
+                {
                     // not the finished view: the status stays Preparing and the shown time is
                     // not marked
                     self.touch(draw.id);
@@ -3250,6 +3448,7 @@ impl<S> State<S> {
         frame.exposure.view = self.exposure_state(key, &frame);
         frame.shadows = self.shadows_state(key, &frame);
         frame.channel = self.channel_state(key, &frame);
+        frame.white_balance.view = self.white_balance_view(key, &frame);
         frame
     }
 
@@ -3267,6 +3466,58 @@ impl<S> State<S> {
     fn channel_state(&self, key: Key, frame: &Frame) -> AdjustState {
         self.adjust_state(key, frame, self.channel != Channel::Color, false, |r| {
             r.channel == self.channel
+        })
+    }
+
+    fn white_balance_of(&self, key: Option<Key>) -> WhiteBalanceState {
+        let raw = key.filter(|k| k.1 == Source::Raw);
+        let info = raw.and_then(|k| self.wb_info.get(&k));
+        let base = match &self.wb_mode {
+            WbMode::Shot => WbBase::Shot,
+            WbMode::Grey => WbBase::Grey,
+            WbMode::Auto => match raw {
+                None => WbBase::AutoNone,
+                Some(key) => match self.wb_auto.get(&key) {
+                    None => WbBase::AutoWaiting,
+                    Some(AutoWb::Unavailable) => WbBase::AutoNone,
+                    Some(AutoWb::Available(_)) => WbBase::Auto,
+                },
+            },
+            WbMode::Daylight if raw.is_none() || info.is_some_and(|i| i.daylight.is_none()) => {
+                WbBase::DaylightNone
+            }
+            WbMode::Daylight => WbBase::Daylight,
+            WbMode::Preset(name)
+                if raw.is_none()
+                    || info.is_some_and(|i| !i.presets.iter().any(|p| p.name == *name)) =>
+            {
+                WbBase::PresetNone(name.clone())
+            }
+            WbMode::Preset(name) => WbBase::Preset(name.clone()),
+        };
+        WhiteBalanceState {
+            mode: self.wb_mode.clone(),
+            base,
+            wb: key.and_then(|k| self.wb_of(k)).unwrap_or(Wb::Shot),
+            view: AdjustState::Off,
+            presets: info.map(|i| Arc::clone(&i.presets)).unwrap_or_default(),
+            has_daylight: info.is_some_and(|i| i.daylight.is_some()),
+        }
+    }
+
+    fn white_balance_view(&self, key: Key, frame: &Frame) -> AdjustState {
+        if key.1 == Source::Raw {
+            let waiting = match &self.wb_mode {
+                WbMode::Auto => frame.white_balance.base == WbBase::AutoWaiting,
+                WbMode::Daylight | WbMode::Preset(_) => !self.wb_info.contains_key(&key),
+                WbMode::Shot | WbMode::Grey => false,
+            };
+            if waiting {
+                return AdjustState::Waiting;
+            }
+        }
+        self.adjust_state(key, frame, self.wb_mode != WbMode::Shot, true, |r| {
+            r.wb == frame.white_balance.wb
         })
     }
 
@@ -3665,6 +3916,7 @@ mod tests {
             exposure: job.exposure,
             shadows: job.shadows,
             channel: job.channel,
+            wb: job.wb,
             image: Rgb {
                 width: 1,
                 height: 1,
@@ -4460,7 +4712,7 @@ mod tests {
             density_q: quantise(o.density),
             sharpen: o.sharpen,
             exposure: o.exposure,
-            wb: Wb::Shot,
+            wb: o.wb,
             shadows: o.shadows,
             channel: o.channel,
         }
@@ -5280,6 +5532,7 @@ mod tests {
             mb24,
             unusable_for_img10,
             |_| None,
+            |_| WbInfo::default(),
             1.0,
         );
     }
@@ -8811,6 +9064,7 @@ mod tests {
                 mb24,
                 |_| false,
                 |_| camera,
+                |_| WbInfo::default(),
                 1.0,
             );
             let job = s.req(k(10), Want::Shown).unwrap().job;
@@ -8862,6 +9116,7 @@ mod tests {
             mb24,
             |_| false,
             |_| Some(0.5),
+            |_| WbInfo::default(),
             1.0,
         );
         s.set_shadows(Some(50));
@@ -8981,6 +9236,425 @@ mod tests {
         let new = s.accept(&out, 3_000_000).unwrap();
         assert_eq!(s.frame(VIEW).draw.unwrap().id, new);
         assert!(s.take_dropped().contains(&old));
+    }
+
+    // White balance in the view core (ADR 0027 W6).
+
+    const AUTO_WB: Wb = Wb::Mul { r: 2000, b: 1500 };
+    const DAYLIGHT_WB: Wb = Wb::Mul { r: 2300, b: 1600 };
+    const SHADE_WB: Wb = Wb::Mul { r: 2700, b: 1400 };
+
+    fn open_with_wb(s: &mut State<u32>, pos: usize, info: WbInfo) {
+        s.finish_open_checked(
+            s.generation,
+            k(pos),
+            Ok((pos as u32, SIZE)),
+            mb24,
+            |_| false,
+            |_| None,
+            |_| info.clone(),
+            1.0,
+        );
+    }
+
+    fn lend_for_balance(s: &mut State<u32>) -> (u64, Key, u32) {
+        match s.pick(true) {
+            Some(Task::Balance {
+                generation,
+                key,
+                session,
+            }) => (generation, key, session),
+            other => panic!("expected a balance task, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn white_balance_defaults_to_as_shot_without_file_information() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        with_session(&mut s, 11);
+        assert!(s.wb_info.is_empty() && s.wb_auto.is_empty());
+        assert_eq!(s.wb_of(k(10)), Some(Wb::Shot));
+        assert_eq!(s.wb_of(k(11)), Some(Wb::Shot));
+        assert!(!renders_of(&s, 10).is_empty());
+        for job in s.plan() {
+            match job {
+                Job::Render(_, view) => assert_eq!(view.wb, Wb::Shot),
+                Job::Open(_) => {}
+                other => panic!("unexpected job {other:?}"),
+            }
+        }
+        assert_eq!(s.frame(VIEW).white_balance, WhiteBalanceState::off());
+    }
+
+    #[test]
+    fn auto_white_balance_precedes_all_render_jobs_for_each_raw_key() {
+        let mut s = state(1024);
+        open_with_wb(&mut s, 10, WbInfo::default());
+        open_with_wb(&mut s, 11, WbInfo::default());
+        let shot = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        s.accept(&out(&s, 10, Want::Target), 100).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, shot);
+        s.clipping_wanted = true;
+        s.focus_wanted = true;
+        assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
+        assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
+        s.set_white_balance(WbMode::Auto);
+        past_dwell(&mut s);
+        let plan = s.plan();
+        assert_eq!(plan.first(), Some(&Job::Balance(k(10))));
+        assert_eq!(
+            plan.iter()
+                .filter(|&&job| job == Job::Balance(k(10)))
+                .count(),
+            1
+        );
+        assert!(plan.contains(&Job::Balance(k(11))));
+        assert!(renders_of(&s, 10).is_empty() && renders_of(&s, 11).is_empty());
+        assert!(s.clipping_job().is_none() && s.focus_job().is_none());
+        let frame = s.frame(VIEW);
+        assert!(matches!(frame.status, Status::Preparing { .. }));
+        assert_eq!(frame.draw.unwrap().id, shot);
+        assert_eq!(frame.white_balance.base, WbBase::AutoWaiting);
+
+        let (generation, key, session) = lend_for_balance(&mut s);
+        assert!(s.pick(true).is_none());
+        s.finish_balance(generation, key, session, Some(AUTO_WB), true, 3.0);
+        assert_eq!(s.stats.balances, 1);
+        assert_eq!(s.stats.balance_ms, vec![3.0]);
+        assert_eq!(s.frame(VIEW).white_balance.base, WbBase::Auto);
+        for zoom in [
+            Zoom::Fit,
+            Zoom::Scale(0.5),
+            Zoom::Scale(0.75),
+            Zoom::Scale(1.0),
+        ] {
+            s.set_zoom(zoom, None, false);
+            past_dwell(&mut s);
+            let views = renders_of(&s, 10);
+            assert!(!views.is_empty());
+            assert!(views.iter().all(|view| view.wb == AUTO_WB));
+            for want in [Want::Shown, Want::Fit, Want::Target, Want::Ring] {
+                assert_eq!(
+                    s.req(key, want).unwrap().job.wb,
+                    AUTO_WB,
+                    "{zoom:?} {want:?}"
+                );
+            }
+        }
+        s.set_zoom(Zoom::Scale(0.75), None, false);
+        assert_eq!(s.pan_view(key).unwrap().0.job.wb, AUTO_WB);
+        assert_eq!(s.wb_of((10, Source::Jpeg)), Some(Wb::Shot));
+
+        s.go(11);
+        let (generation, key, session) = lend_for_balance(&mut s);
+        assert_eq!(key, k(11));
+        s.finish_balance(generation, key, session, None, true, 1.0);
+        let frame = s.frame(VIEW);
+        assert_eq!(
+            (frame.white_balance.wb, frame.white_balance.base),
+            (Wb::Shot, WbBase::AutoNone)
+        );
+        assert!(!s.plan().contains(&Job::Balance(key)));
+    }
+
+    #[test]
+    fn auto_white_balance_reopens_a_prefetched_neighbour_even_with_as_shot_views() {
+        let mut s = state(1024);
+        open_with_wb(&mut s, 10, WbInfo::default());
+        open_with_wb(&mut s, 11, WbInfo::default());
+        for want in [Want::Fit, Want::Target] {
+            s.accept(&out(&s, 11, want), 100).unwrap();
+        }
+        s.drop_session(k(11));
+        let shot_plan = s.plan();
+        assert!(!shot_plan.contains(&Job::Open(k(11))));
+        s.set_white_balance(WbMode::Auto);
+        past_dwell(&mut s);
+        assert!(s.plan().contains(&Job::Open(k(11))));
+        s.reset_white_balance();
+        past_dwell(&mut s);
+        assert_eq!(s.plan(), shot_plan);
+    }
+
+    #[test]
+    fn auto_exposure_runs_before_auto_white_balance_and_an_unusable_session_is_reopened() {
+        let mut s = state(1024);
+        open_with_wb(&mut s, 10, WbInfo::default());
+        s.set_exposure_mode(ExposureMode::Auto);
+        s.set_white_balance(WbMode::Auto);
+        assert_eq!(s.plan(), vec![Job::Statistics(k(10))]);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        s.finish_statistics(generation, key, session, None, true, 1.0);
+        assert_eq!(s.plan(), vec![Job::Balance(key)]);
+        let (_, _, session) = lend_for_balance(&mut s);
+        s.finish_balance(generation, key, session, None, false, 1.0);
+        assert!(!s.sessions.contains_key(&key));
+        assert!(!s.wb_auto.contains_key(&key));
+        assert_eq!(s.plan(), vec![Job::Open(key)]);
+        open_with_wb(&mut s, 10, WbInfo::default());
+        assert_eq!(s.plan(), vec![Job::Balance(key)]);
+    }
+
+    #[test]
+    fn daylight_and_named_presets_come_from_each_opened_file() {
+        let mut s = state(1024);
+        let presets: Arc<[_]> = Arc::from([
+            WbPreset {
+                name: "Daylight".into(),
+                wb: Wb::Mul { r: 2415, b: 1568 },
+            },
+            WbPreset {
+                name: "Shade".into(),
+                wb: SHADE_WB,
+            },
+        ]);
+        let shade_mode = WbMode::Preset("Shade".into());
+        for (mode, base) in [
+            (WbMode::Daylight, WbBase::Daylight),
+            (shade_mode.clone(), WbBase::Preset("Shade".into())),
+        ] {
+            s.set_white_balance(mode);
+            let wb = s.frame(VIEW).white_balance;
+            assert_eq!((wb.base, wb.view), (base, AdjustState::Waiting));
+            assert!(wb.presets.is_empty() && !wb.has_daylight);
+        }
+        open_with_wb(
+            &mut s,
+            10,
+            WbInfo {
+                presets: Arc::clone(&presets),
+                daylight: Some(DAYLIGHT_WB),
+                ..WbInfo::default()
+            },
+        );
+        open_with_wb(
+            &mut s,
+            11,
+            WbInfo {
+                presets: Arc::from([presets[0].clone()]),
+                ..WbInfo::default()
+            },
+        );
+        s.set_white_balance(WbMode::Daylight);
+        let wb = s.frame(VIEW).white_balance;
+        assert_eq!((wb.base, wb.wb), (WbBase::Daylight, DAYLIGHT_WB));
+        assert!(wb.has_daylight && Arc::ptr_eq(&wb.presets, &presets));
+        assert_eq!(s.req(k(10), Want::Shown).unwrap().job.wb, DAYLIGHT_WB);
+        s.set_white_balance(shade_mode);
+        assert_eq!(s.req(k(10), Want::Shown).unwrap().job.wb, SHADE_WB);
+        past_dwell(&mut s);
+        let views = renders_of(&s, 11);
+        assert!(!views.is_empty() && views.iter().all(|view| view.wb == Wb::Shot));
+        s.go(11);
+        let wb = s.frame(VIEW).white_balance;
+        assert_eq!(
+            (wb.base, wb.wb),
+            (WbBase::PresetNone("Shade".into()), Wb::Shot)
+        );
+        assert!(!wb.has_daylight);
+        s.set_white_balance(WbMode::Daylight);
+        assert_eq!(s.frame(VIEW).white_balance.base, WbBase::DaylightNone);
+    }
+
+    #[test]
+    fn white_balance_modes_survive_navigation_and_reset_to_shot() {
+        for mode in [
+            WbMode::Auto,
+            WbMode::Daylight,
+            WbMode::Preset("Shade".into()),
+        ] {
+            let mut s = state(1024);
+            let before = s.since;
+            assert!(s.set_white_balance(mode.clone()));
+            assert!(s.since > before);
+            let changed_at = s.since;
+            assert!(!s.set_white_balance(mode.clone()));
+            assert!(!s.set_white_balance(WbMode::Grey));
+            assert_eq!(s.since, changed_at);
+            s.go(11);
+            assert_eq!(s.frame(VIEW).white_balance.mode, mode);
+            s.open_folder(vec![PathBuf::from("another.raw")]);
+            assert_eq!(s.frame(VIEW).white_balance.mode, mode);
+            s.set_files(Vec::new(), 0);
+            let wb = s.frame(VIEW).white_balance;
+            assert_eq!((wb.mode, wb.view), (mode, AdjustState::Off));
+            assert!(wb.presets.is_empty());
+            assert!(s.reset_white_balance());
+            assert!(!s.reset_white_balance());
+            assert_eq!(s.frame(VIEW).white_balance, WhiteBalanceState::off());
+        }
+    }
+
+    #[test]
+    fn white_balance_is_paused_in_jpeg_mode_and_for_tiff_files() {
+        let mut s = state(1024);
+        s.set_mode(Source::Jpeg);
+        for file in [None, Some("a.tif")] {
+            if let Some(file) = file {
+                s.set_mode(Source::Raw);
+                s.open_folder(vec![PathBuf::from(file)]);
+            }
+            let key = s.cur_key().unwrap();
+            assert_eq!(key.1, Source::Jpeg);
+            s.sizes.insert(key, SIZE);
+            for (mode, base, view) in [
+                (WbMode::Shot, WbBase::Shot, AdjustState::Off),
+                (WbMode::Auto, WbBase::AutoNone, AdjustState::Paused),
+                (WbMode::Daylight, WbBase::DaylightNone, AdjustState::Paused),
+                (
+                    WbMode::Preset("Shade".into()),
+                    WbBase::PresetNone("Shade".into()),
+                    AdjustState::Paused,
+                ),
+            ] {
+                s.set_white_balance(mode.clone());
+                assert_eq!(s.req(key, Want::Shown).unwrap().job.wb, Wb::Shot);
+                let wb = s.frame(VIEW).white_balance;
+                assert_eq!(
+                    (wb.mode, wb.base, wb.view, wb.wb),
+                    (mode, base, view, Wb::Shot)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn white_balance_swaps_the_drawn_view_and_reuses_as_shot() {
+        let mut s = state(1024);
+        open_with_wb(
+            &mut s,
+            10,
+            WbInfo {
+                daylight: Some(DAYLIGHT_WB),
+                ..WbInfo::default()
+            },
+        );
+        let shot = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, shot);
+        s.set_white_balance(WbMode::Daylight);
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.white_balance.view),
+            (shot, AdjustState::Waiting)
+        );
+        let req = s.req(k(10), Want::Shown).unwrap();
+        assert!(s.plan().contains(&Job::Render(k(10), req.job)));
+        let daylight = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.white_balance.view),
+            (daylight, AdjustState::Shown)
+        );
+        s.reset_white_balance();
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.white_balance.view),
+            (shot, AdjustState::Off)
+        );
+    }
+
+    #[test]
+    fn a_gesture_prefers_the_wanted_white_balance_before_density() {
+        let mut s = state(1024);
+        open_with_wb(
+            &mut s,
+            10,
+            WbInfo {
+                daylight: Some(DAYLIGHT_WB),
+                ..WbInfo::default()
+            },
+        );
+        s.zoom = Zoom::Scale(0.4);
+        let shot = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        s.set_white_balance(WbMode::Daylight);
+        s.zoom = Zoom::Scale(0.25);
+        let daylight = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        s.set_zoom(Zoom::Scale(0.45), None, true);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(
+            (f.draw.unwrap().id, f.white_balance.view),
+            (daylight, AdjustState::Waiting)
+        );
+        s.reset_white_balance();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, shot);
+    }
+
+    #[test]
+    fn a_late_fine_view_cannot_evict_the_wanted_white_balance() {
+        let mut s = state(4);
+        open_with_wb(
+            &mut s,
+            10,
+            WbInfo {
+                daylight: Some(DAYLIGHT_WB),
+                ..WbInfo::default()
+            },
+        );
+        ready_for_fine(&mut s, None);
+        let late = out(&s, 10, Want::Fine);
+        s.set_white_balance(WbMode::Daylight);
+        let daylight = s.accept(&out(&s, 10, Want::Fine), 3_000_000).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, daylight);
+        s.accept(&late, 3_000_000).unwrap();
+        assert!(!s.take_dropped().contains(&daylight));
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.white_balance.view),
+            (daylight, AdjustState::Shown)
+        );
+    }
+
+    #[test]
+    fn a_metadata_release_keeps_the_auto_balance_but_drops_its_session() {
+        let mut s = state(1024);
+        open_with_wb(&mut s, 10, WbInfo::default());
+        s.set_white_balance(WbMode::Auto);
+        let (generation, key, session) = lend_for_balance(&mut s);
+        let path = path(10);
+        s.begin_release(&path);
+        assert_eq!(s.release(&path), (true, false));
+        s.finish_balance(generation, key, session, Some(AUTO_WB), true, 1.0);
+        assert!(!s.sessions.contains_key(&key));
+        assert!(s.pick(true).is_none());
+        let wb = s.frame(VIEW).white_balance;
+        assert_eq!((wb.wb, wb.view), (AUTO_WB, AdjustState::Waiting));
+        s.end_release(&path);
+        assert!(matches!(s.pick(true), Some(Task::Open { key: opened, .. }) if opened == key));
+        open_with_wb(&mut s, 10, WbInfo::default());
+        assert!(matches!(s.pick(true), Some(Task::Render { view, .. }) if view.wb == AUTO_WB));
+    }
+
+    #[test]
+    fn auto_balance_results_survive_mode_changes_but_not_a_new_generation() {
+        let mut s = state(1024);
+        open_with_wb(
+            &mut s,
+            10,
+            WbInfo {
+                daylight: Some(DAYLIGHT_WB),
+                ..WbInfo::default()
+            },
+        );
+        open_with_wb(&mut s, 11, WbInfo::default());
+        s.set_white_balance(WbMode::Auto);
+        let (generation, key, session) = lend_for_balance(&mut s);
+        s.set_white_balance(WbMode::Daylight);
+        s.finish_balance(generation, key, session, Some(AUTO_WB), true, 1.0);
+        assert_eq!(s.wb_of(key), Some(DAYLIGHT_WB));
+        s.set_white_balance(WbMode::Auto);
+        assert_eq!(s.wb_of(key), Some(AUTO_WB));
+        s.go(11);
+        let (generation, key, session) = lend_for_balance(&mut s);
+        s.set_files(vec![path(10), path(11)], 1);
+        s.finish_balance(generation, key, session, Some(SHADE_WB), true, 1.0);
+        assert_eq!(s.wb_of(k(0)), Some(AUTO_WB));
+        assert_eq!(s.wb_of(k(1)), None);
+        assert!(s.wb_info.contains_key(&k(1)));
+        assert!(matches!(s.pick(true), Some(Task::Open { key, .. }) if key == k(1)));
+        s.open_folder(vec![path(10)]);
+        assert!(s.wb_info.is_empty() && s.wb_auto.is_empty());
     }
 
     // Channel view in the view core (ADR 0027 W4).

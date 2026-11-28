@@ -359,6 +359,7 @@ mod tests {
             },
             shadows: pw_viewcore::AdjustState::Off,
             channel: pw_viewcore::AdjustState::Off,
+            white_balance: pw_viewcore::WhiteBalanceState::off(),
         }
     }
 
@@ -596,6 +597,7 @@ mod tests {
             },
             shadows: pw_viewcore::AdjustState::Off,
             channel: pw_viewcore::AdjustState::Off,
+            white_balance: pw_viewcore::WhiteBalanceState::off(),
         }
     }
 

@@ -14,8 +14,8 @@ use crate::scale;
 use crate::shadows;
 use crate::sharpen::{self, Sharpening};
 use crate::state::{
-    Config, ExposureMode, Frame, JobView, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP,
-    Zoom,
+    Config, ExposureMode, Frame, JobView, Record, State, Stats, Task, ViewKind, ViewOut, WbMode,
+    ZOOM_STEP, Zoom,
 };
 
 /// The longest a worker sleeps without a reason (a safety net; changes wake it at once).
@@ -79,6 +79,7 @@ impl<B: Backend> Shared<B> {
                         |size, source| self.backend.session_bytes(size, source),
                         |session| self.backend.profile_unusable(session),
                         |session| self.backend.camera_exposure(session),
+                        |session| self.backend.white_balance_info(session),
                         ms,
                     );
                     s.stop_unwanted();
@@ -107,6 +108,17 @@ impl<B: Backend> Shared<B> {
                     let usable = result.is_some() || self.backend.session_usable(&session);
                     let mut s = self.state();
                     s.finish_statistics(generation, key, session, result, usable, ms);
+                }
+                Task::Balance {
+                    generation,
+                    key,
+                    mut session,
+                } => {
+                    let result = self.backend.auto_white_balance(&mut session);
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let usable = result.is_some() || self.backend.session_usable(&session);
+                    let mut s = self.state();
+                    s.finish_balance(generation, key, session, result, usable, ms);
                 }
                 Task::Clipping {
                     generation,
@@ -455,6 +467,16 @@ impl<B: Backend> ViewCore<B> {
     /// nothing is recorded. A render under way finishes (owner, 2026-11-25, as for sharpening).
     pub fn set_channel(&self, channel: Channel) {
         self.update_adjustment(|st| st.set_channel(channel));
+    }
+
+    /// Sets the session's white balance mode. Grey is reserved for a measurement on the image.
+    pub fn set_white_balance(&self, mode: WbMode) -> bool {
+        self.update_adjustment(|st| st.set_white_balance(mode))
+    }
+
+    /// Returns to the camera's as-shot white balance.
+    pub fn reset_white_balance(&self) -> bool {
+        self.update_adjustment(State::reset_white_balance)
     }
 
     /// One manual exposure step of ⅓ EV for the current image (`delta` 1 or −1, W5-Q2). Returns

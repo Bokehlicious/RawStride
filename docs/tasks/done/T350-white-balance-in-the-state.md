@@ -1,4 +1,4 @@
-# T350. ADR 0027 W6: the white balance's mode in the view core's state — Open
+# T350. ADR 0027 W6: the white balance's mode in the view core's state — Done
 
 - **Why:** ADR 0027 §2.1, §3.5 and W6-Q3, W6-Q4, W6-Q6, W6-Q7, W6-Q8 (answered by the owner
   2026-11-28, ADR 0027 §4.6). T349 made the render path carry a balance (`JobView::wb`, a `Wb`)
@@ -213,3 +213,5 @@
 | 2026-11-28 | Blocked | Added (as T350 with the click); waits for T349 |
 | 2026-11-28 | Blocked | Cold read and chain review: the click split out to T352; added the key-first `wb_of` for `Shot`, the `waiting_for_auto` extension, `Stats` fields for the balance's time, `finish_open_checked`'s other callers, the `WbBase` rules before the info is there and for a non-RAW key, `Arc` for the preset list, the exports and derives, the engine test's `Fake` |
 | 2026-11-28 | Open | T349 done; set to Open by the reviewer (the cold read and the chain review are above) |
+| 2026-11-28 | Ready for review | Added per-image white balance, auto measurement before rendering, balance-aware view reuse and frame state. Added 12 state tests and one worker integration test. The reviewer updates the test inventory under the Codex task rules. |
+| 2026-11-28 | Done | Review (Codex's work): every point under What and every test under Tests to add done; only the named files changed. Independent review (one fresh agent, owner's yes): no bug; one deviation fixed by the reviewer with the owner's yes: `white_balance_view` set `Waiting` in the mode Auto during every metadata release, also with the balance stored and drawn (point 11 asks it only while the balance is made, which `adjust_state` already gives), the release condition removed; `finish_open_checked`'s doc comment rewrapped. Kept as Codex made them (sensible, beyond the text): no view is `Ready` and no gesture stand-in is drawn while auto waits, and `statistics_job` waits for the balance. A failed RAW file in the mode Auto has the base `AutoWaiting` with the view `Off` (no mark; no change). `.\tools\check.ps1` all OK after the fix (see the commit). `docs/test-inventory.md` updated by the reviewer. Nothing left over; no change-log line (no key or menu yet, T351) |
