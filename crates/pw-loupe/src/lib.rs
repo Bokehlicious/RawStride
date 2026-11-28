@@ -157,7 +157,8 @@ pub use preview::{
 pub use preview_text::{
     AdjustmentMark, ClippingText, ExposureKeys, HistogramText, PreviewText, adjustment_marks,
     clipped_text, clipping_state_text, clipping_text, clipping_text_with_key, deep_shadows_text,
-    histogram_text, preview_text, preview_text_with_key, sharpening_values_text, zoom_value_text,
+    histogram_text, pick_line, preview_text, preview_text_with_key, sharpening_values_text,
+    zoom_value_text,
 };
 pub use rating_text::{
     ROTATION_UNSUPPORTED_TEXT, UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name,
@@ -532,6 +533,8 @@ pub enum PreviewKey {
     PreviousChannel,
     /// `W`: auto white balance on ↔ As Shot (ADR 0027 W6-Q6).
     AutoWhiteBalance,
+    /// Shift+W starts or cancels the gray pick.
+    PickGray,
     /// `Backspace`: every adjustment of the preview turned off (ADR 0027 A-Q3, W3-Q8, T318).
     ResetAdjustments,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
@@ -579,6 +582,7 @@ pub fn preview_key_action(
         (K::N, false, false, false) => Some(PreviewKey::NextChannel),
         (K::N, false, true, false) => Some(PreviewKey::PreviousChannel),
         (K::W, false, false, false) => Some(PreviewKey::AutoWhiteBalance),
+        (K::W, false, true, false) => Some(PreviewKey::PickGray),
         (K::Backspace, false, false, false) => Some(PreviewKey::ResetAdjustments),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
@@ -1261,6 +1265,7 @@ mod tests {
                     Some(PreviewKey::NextChannel) => return Some(Command::NextChannel),
                     Some(PreviewKey::PreviousChannel) => return Some(Command::PreviousChannel),
                     Some(PreviewKey::AutoWhiteBalance) => return Some(Command::AutoWhiteBalance),
+                    Some(PreviewKey::PickGray) => return Some(Command::PickGray),
                     Some(PreviewKey::ResetAdjustments) => {
                         return Some(Command::ResetAdjustments);
                     }
@@ -2071,6 +2076,25 @@ mod tests {
             ),
             Some(Command::CloseTab)
         );
+    }
+
+    #[test]
+    fn shift_w_starts_pick_gray_only_in_the_preview() {
+        let chord = KeyChord {
+            key: egui::Key::W,
+            ctrl: false,
+            shift: true,
+            alt: false,
+        };
+        assert_eq!(
+            preview_key_action(chord.key, chord.ctrl, chord.shift, chord.alt),
+            Some(PreviewKey::PickGray)
+        );
+        assert_eq!(
+            command_of_key(chord, ViewMode::Loupe),
+            Some(Command::PickGray)
+        );
+        assert_eq!(command_of_key(chord, ViewMode::Grid), None);
     }
 
     #[test]

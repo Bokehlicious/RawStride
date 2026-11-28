@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T353](T353-pick-gray-keys-and-mode.md) | ADR 0027 W6: Pick Gray, the key, the menu item, the pick mode and its click (pw-loupe) | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

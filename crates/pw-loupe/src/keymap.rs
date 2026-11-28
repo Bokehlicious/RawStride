@@ -110,6 +110,7 @@ pub enum KeyAction {
     NextChannel,
     PreviousChannel,
     AutoWhiteBalance,
+    PickGray,
     ResetAdjustments,
     Compare,
     HoldImage,
@@ -172,7 +173,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 58] = [
+    pub const ALL: [KeyAction; 59] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -221,6 +222,7 @@ impl KeyAction {
         Self::NextChannel,
         Self::PreviousChannel,
         Self::AutoWhiteBalance,
+        Self::PickGray,
         Self::ResetAdjustments,
         Self::Compare,
         Self::HoldImage,
@@ -289,6 +291,7 @@ impl KeyAction {
             Self::NextChannel => "next_channel",
             Self::PreviousChannel => "previous_channel",
             Self::AutoWhiteBalance => "auto_white_balance",
+            Self::PickGray => "pick_gray",
             Self::ResetAdjustments => "reset_adjustments",
             Self::Compare => "compare",
             Self::HoldImage => "hold_image",
@@ -355,6 +358,7 @@ impl KeyAction {
             | Self::NextChannel
             | Self::PreviousChannel
             | Self::AutoWhiteBalance
+            | Self::PickGray
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -393,6 +397,7 @@ impl KeyAction {
             | Self::NextChannel
             | Self::PreviousChannel
             | Self::AutoWhiteBalance
+            | Self::PickGray
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -456,6 +461,7 @@ impl KeyAction {
             Self::NextChannel => [plain(Key::N), None],
             Self::PreviousChannel => [with_shift(Key::N), None],
             Self::AutoWhiteBalance => [plain(Key::W), None],
+            Self::PickGray => [with_shift(Key::W), None],
             Self::ResetAdjustments => [plain(Key::Backspace), None],
             Self::Compare => [plain(Key::C), None],
             Self::HoldImage => [plain(Key::K), None],
@@ -523,6 +529,7 @@ impl KeyAction {
             Command::NextChannel => Self::NextChannel,
             Command::PreviousChannel => Self::PreviousChannel,
             Command::AutoWhiteBalance => Self::AutoWhiteBalance,
+            Command::PickGray => Self::PickGray,
             Command::ResetAdjustments => Self::ResetAdjustments,
             Command::Compare => Self::Compare,
             Command::HoldImage => Self::HoldImage,
@@ -587,6 +594,7 @@ impl KeyAction {
             Self::NextChannel => Command::NextChannel,
             Self::PreviousChannel => Command::PreviousChannel,
             Self::AutoWhiteBalance => Command::AutoWhiteBalance,
+            Self::PickGray => Command::PickGray,
             Self::ResetAdjustments => Command::ResetAdjustments,
             Self::Compare => Command::Compare,
             Self::HoldImage => Command::HoldImage,
@@ -1254,6 +1262,7 @@ mod tests {
                 PreviewKey::NextChannel => Action(A::NextChannel),
                 PreviewKey::PreviousChannel => Action(A::PreviousChannel),
                 PreviewKey::AutoWhiteBalance => Action(A::AutoWhiteBalance),
+                PreviewKey::PickGray => Action(A::PickGray),
                 PreviewKey::ResetAdjustments => Action(A::ResetAdjustments),
                 PreviewKey::Compare => Action(A::Compare),
                 PreviewKey::HoldImage => Action(A::HoldImage),
@@ -1996,7 +2005,8 @@ mod tests {
             .unwrap();
         assert_eq!(KeyAction::ALL[place + 1], KeyAction::Sharpening);
         assert_eq!(KeyAction::ALL[place + 10], KeyAction::AutoWhiteBalance);
-        assert_eq!(KeyAction::ALL[place + 11], KeyAction::ResetAdjustments);
+        assert_eq!(KeyAction::ALL[place + 11], KeyAction::PickGray);
+        assert_eq!(KeyAction::ALL[place + 12], KeyAction::ResetAdjustments);
     }
 
     #[test]
@@ -2056,6 +2066,12 @@ mod tests {
                 "auto_white_balance",
                 plain(Key::W).unwrap(),
                 Command::AutoWhiteBalance,
+            ),
+            (
+                KeyAction::PickGray,
+                "pick_gray",
+                with_shift(Key::W).unwrap(),
+                Command::PickGray,
             ),
         ];
         let place = KeyAction::ALL

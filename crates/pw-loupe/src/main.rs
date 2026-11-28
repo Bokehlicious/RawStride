@@ -107,8 +107,8 @@ use pw_loupe::{
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
-    filmstrip_range, hit_test, preview_info_shown, preview_parts, preview_text, scroll_target,
-    thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
+    filmstrip_range, hit_test, pick_line, preview_info_shown, preview_parts, preview_text,
+    scroll_target, thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
 };
 use pw_loupe::{
     FieldValues, ValueChoice, ValueList, field_values_path, load_field_values, save_field_values,
@@ -160,8 +160,9 @@ use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
-    Channel, ClippingState, Config, ExposureMode, FocusState, Frame, ImageStatistics, Sharpening,
-    Source, Status, ViewCore, WbMode, WbPreset, WhiteBalanceState, Zoom, shadows,
+    Channel, ClippingState, Config, ExposureMode, FocusState, Frame, ImageStatistics, PickResult,
+    PickState, Sharpening, Source, Status, ViewCore, WbMode, WbPreset, WhiteBalanceState, Zoom,
+    shadows,
 };
 
 mod inspector;
@@ -1375,11 +1376,37 @@ struct PreviewExposure {
     white_balance: WbMode,
     /// The last mode sent to each core, current first and held second.
     wb_sent: [Option<WbMode>; 2],
+    /// Waiting for a click to measure white balance from gray (Shift+W).
+    picking: bool,
     /// The preview was shown on the frame before, so leaving it resets the steps (A-Q2).
     was_in_preview: bool,
 }
 
 impl PreviewExposure {
+    fn pick_at_click(
+        &mut self,
+        core: &ViewCore<NativeBackend>,
+        response: &egui::Response,
+        pick: PickState,
+    ) -> PickState {
+        if self.picking
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let rect = response.rect;
+            let ppp = response.ctx.pixels_per_point();
+            let result = core.pick_grey(pointer_in_view(pos, rect, ppp), view_px(rect, ppp));
+            self.pick_event(PickEvent::ImageClick);
+            match result {
+                PickResult::Outside => pick,
+                PickResult::Unusable => PickState::Unusable,
+                PickResult::Started => PickState::Measuring,
+            }
+        } else {
+            pick
+        }
+    }
+
     fn at_start(auto: bool) -> Self {
         Self {
             exposure_mode: if auto {
@@ -1461,7 +1488,24 @@ impl PreviewExposure {
         }
     }
 
+    fn toggle_pick(&mut self, repeat: bool, can_pick: bool) {
+        if !repeat && can_pick {
+            self.picking = !self.picking;
+        }
+    }
+
+    fn end_pick(&mut self) {
+        self.picking = false;
+    }
+
+    fn pick_event(&mut self, event: PickEvent) {
+        if pick_ends(self.picking, event) {
+            self.end_pick();
+        }
+    }
+
     fn reset(&mut self, cores: [&ViewCore<NativeBackend>; 2]) {
+        self.end_pick();
         self.exposure_mode = ExposureMode::Off;
         self.shadows = false;
         self.channel = Channel::Color;
@@ -1481,6 +1525,9 @@ impl PreviewExposure {
         frame_modes: [&WbMode; 2],
     ) {
         let [current, held] = cores;
+        if !in_preview {
+            self.pick_event(PickEvent::LeftPreview);
+        }
         if self.was_in_preview && !in_preview {
             current.reset_exposure_steps();
             held.reset_exposure_steps();
@@ -1517,6 +1564,78 @@ impl PreviewExposure {
     }
 }
 
+enum PickEvent {
+    Escape,
+    Command(Command),
+    ViewAction(Action),
+    ImageChanged,
+    LeftPreview,
+    FrameCanPick(bool),
+    OutsideClick,
+    ImageClick,
+}
+
+fn pick_ends(picking: bool, event: PickEvent) -> bool {
+    picking
+        && match event {
+            PickEvent::Escape
+            | PickEvent::ImageChanged
+            | PickEvent::LeftPreview
+            | PickEvent::OutsideClick
+            | PickEvent::ImageClick => true,
+            PickEvent::FrameCanPick(can_pick) => !can_pick,
+            PickEvent::ViewAction(action) => matches!(
+                action,
+                Action::ToggleZoom
+                    | Action::Fit
+                    | Action::ZoomStep(_)
+                    | Action::ToggleMode
+                    | Action::ToggleAnchor
+                    | Action::ToggleInfo
+            ),
+            PickEvent::Command(command) => matches!(
+                command,
+                Command::WhiteBalanceShot
+                    | Command::WhiteBalanceDaylight
+                    | Command::WhiteBalancePreset(_)
+                    | Command::AutoWhiteBalance
+                    | Command::FineDetails
+                    | Command::Sharpening
+                    | Command::Shadows
+                    | Command::ExposureBrighter
+                    | Command::ExposureDarker
+                    | Command::ResetExposure
+                    | Command::AutoExposure
+                    | Command::CameraBrightness
+                    | Command::NextChannel
+                    | Command::PreviousChannel
+                    | Command::Channel(_)
+                    | Command::ResetAdjustments
+                    | Command::ClipHighlights
+                    | Command::ClipShadows
+                    | Command::FocusMarking
+                    | Command::Compare
+                    | Command::HoldImage
+                    | Command::SwapImages
+                    | Command::AboveBelow
+                    | Command::LockZoom
+                    | Command::ToggleColumns
+                    | Command::LeftColumn
+                    | Command::RotateLeft
+                    | Command::RotateRight
+            ),
+        }
+}
+
+fn command_available_in_view(command: Command, view: Option<ViewMode>, can_pick: bool) -> bool {
+    let in_scope = match command.acts_in() {
+        Where::Grid => view == Some(ViewMode::Grid),
+        Where::Loupe => view == Some(ViewMode::Loupe),
+        Where::Both => true,
+    };
+    in_scope && (command != Command::PickGray || can_pick)
+}
+
 /// Send an explicit choice or restore the session mode after the core resets it.
 /// A gray sample stays with its image until an explicit choice or a core reset.
 fn wb_to_send(target: &WbMode, sent: &Option<WbMode>, frame_mode: &WbMode) -> Option<WbMode> {
@@ -1529,6 +1648,7 @@ fn wb_checked(command: Command, frame: &WhiteBalanceState) -> Option<bool> {
         Command::WhiteBalanceShot => frame.mode == WbMode::Shot,
         Command::AutoWhiteBalance => frame.mode == WbMode::Auto,
         Command::WhiteBalanceDaylight => frame.mode == WbMode::Daylight,
+        Command::PickGray => frame.mode == WbMode::Grey,
         Command::WhiteBalancePreset(place) => {
             matches!(&frame.mode, WbMode::Preset(name) if frame.presets
                 .get(usize::from(place)).is_some_and(|preset| preset.name == *name))
@@ -4489,6 +4609,7 @@ impl Loupe {
                 }
             }
             ViewMode::Grid => {
+                self.exposure.pick_event(PickEvent::LeftPreview);
                 self.core.open_folder(Vec::new());
                 self.thumb_worker.resume();
             }
@@ -5090,6 +5211,7 @@ impl Loupe {
     }
 
     fn act(&mut self, action: Action, anchor: Option<[f64; 2]>) {
+        self.exposure.pick_event(PickEvent::ViewAction(action));
         match action {
             // Steps go through the tab's visible list; the core follows (ADR 0014 §4.4).
             Action::Next => self.loupe_move(LoupeMove::Next),
@@ -6618,6 +6740,12 @@ impl Loupe {
             self.queue_moves(MoveKind::Reject, moves);
             return done;
         }
+        if in_preview
+            && !self.dialog_open()
+            && let Some(command) = action.command()
+        {
+            self.exposure.pick_event(PickEvent::Command(command));
+        }
         match action {
             A::OpenFolder | A::Import | A::CloseTab | A::FullScreen if in_preview => {}
             A::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
@@ -6652,6 +6780,7 @@ impl Loupe {
             | A::NextChannel
             | A::PreviousChannel
             | A::AutoWhiteBalance
+            | A::PickGray
             | A::ResetAdjustments
             | A::Compare
             | A::HoldImage
@@ -6681,6 +6810,9 @@ impl Loupe {
                         A::AutoWhiteBalance => self
                             .exposure
                             .toggle_auto_white_balance(repeat, &self.last_white_balance.mode),
+                        A::PickGray => self
+                            .exposure
+                            .toggle_pick(repeat, self.last_white_balance.can_pick),
                         A::ResetAdjustments => self.reset_adjustments(),
                         A::Compare => self.toggle_compare(),
                         A::HoldImage => self.hold_current_image(),
@@ -8955,10 +9087,8 @@ impl Loupe {
     fn command_enabled(&self, command: Command) -> bool {
         let tab = self.tabs.active();
         let view = tab.map(|tab| tab.mode);
-        match command.acts_in() {
-            Where::Grid if view != Some(ViewMode::Grid) => return false,
-            Where::Loupe if view != Some(ViewMode::Loupe) => return false,
-            Where::Both | Where::Grid | Where::Loupe => {}
+        if !command_available_in_view(command, view, self.last_white_balance.can_pick) {
+            return false;
         }
         match command {
             Command::CloseTab
@@ -9073,6 +9203,7 @@ impl Loupe {
         if !self.command_enabled(command) || self.dialog_open() {
             return;
         }
+        self.exposure.pick_event(PickEvent::Command(command));
         match command {
             Command::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
             Command::ReloadFolder => self.reload_active_tab(ctx),
@@ -9145,6 +9276,9 @@ impl Loupe {
                 .exposure
                 .toggle_auto_white_balance(false, &self.last_white_balance.mode),
             Command::WhiteBalanceDaylight => self.exposure.set_white_balance(WbMode::Daylight),
+            Command::PickGray => self
+                .exposure
+                .toggle_pick(false, self.last_white_balance.can_pick),
             Command::WhiteBalancePreset(place) => self
                 .exposure
                 .set_preset(place, &self.last_white_balance.presets),
@@ -10355,7 +10489,10 @@ impl Loupe {
                 }
                 Some(FixedKey::ClearMarking) if in_grid => self.clear_selection(),
                 Some(FixedKey::ClosePreview) => {
-                    if self.compare.is_some() && key == egui::Key::Escape {
+                    if key == egui::Key::Escape && self.exposure.picking {
+                        self.exposure.pick_event(PickEvent::Escape);
+                        ctx.request_repaint();
+                    } else if self.compare.is_some() && key == egui::Key::Escape {
                         // Escape closes an open compare first and the current image stays in the
                         // preview (U6-Q11, T153); Enter closes the preview, and the compare with
                         // it (`follow_compare`).
@@ -10473,6 +10610,7 @@ impl Loupe {
             .map(|counts| reading_metadata_text(counts.done, counts.total));
         let shown = ImageAreaShown {
             anchor_at_pointer: self.anchor_at_pointer,
+            picking: self.exposure.picking,
             choice: ClipChoice {
                 highlights: self.settings.shell.clip_highlights,
                 shadows: self.settings.shell.clip_shadows,
@@ -10507,7 +10645,7 @@ impl Loupe {
         // image as the keys do; none while a dialog holds the program (ADR 0019 §2.9, E-Q15,
         // E-Q16, T221).
         let context_menu = !self.dialog_open();
-        let (frame, response) = draw_image_area(
+        let (frame, response, line_bottom) = draw_image_area(
             ui,
             &self.core,
             &self.core,
@@ -10518,8 +10656,12 @@ impl Loupe {
             ui.scope_id().with("image"),
             &shown,
         );
-        // The held side's menu is attached after the `match`: `open` borrows `self.compare`.
-        let mut held_response = None;
+        if self.last_preview_path != frame.path {
+            self.exposure.pick_event(PickEvent::ImageChanged);
+        }
+        self.exposure
+            .pick_event(PickEvent::FrameCanPick(frame.white_balance.can_pick));
+        let mut held_area = None;
         match (halves, &mut self.compare) {
             (Some((held_rect, _)), Some(open)) => {
                 if self.last_preview_path.is_some() && self.last_preview_path != frame.path {
@@ -10553,7 +10695,7 @@ impl Loupe {
                 } else {
                     &self.second_core
                 };
-                let (held_frame, held) = draw_image_area(
+                let (held_frame, held, held_line_bottom) = draw_image_area(
                     ui,
                     &self.second_core,
                     held_mouse,
@@ -10564,9 +10706,11 @@ impl Loupe {
                     ui.scope_id().with("held-image"),
                     &shown,
                 );
-                held_response = Some(held);
-                if open.last_held_path.is_some() && open.last_held_path != held_frame.path {
-                    self.core.reset_exposure_steps();
+                if open.last_held_path != held_frame.path {
+                    self.exposure.pick_event(PickEvent::ImageChanged);
+                    if open.last_held_path.is_some() {
+                        self.core.reset_exposure_steps();
+                    }
                 }
                 open.last_held_path.clone_from(&held_frame.path);
                 if open.last_white_balance_mode != held_frame.white_balance.mode {
@@ -10592,6 +10736,7 @@ impl Loupe {
                     egui::Stroke::new(2.0, MARKED_BLUE),
                     egui::StrokeKind::Inside,
                 );
+                held_area = Some((held_frame.white_balance.pick, held, held_line_bottom));
             }
             _ => {
                 // Outside the compare the second view core holds nothing: its textures are
@@ -10611,9 +10756,39 @@ impl Loupe {
         self.last_white_balance.clone_from(&frame.white_balance);
         if context_menu {
             response.context_menu(|ui| self.image_context_menu(ui, commands));
-            if let Some(held) = held_response {
+            if let Some((_, held, _)) = &held_area {
                 held.context_menu(|ui| self.image_context_menu(ui, commands));
             }
+        }
+        // Even if the Pick Gray menu item is outside the image, its click toggles the mode.
+        if self.exposure.picking
+            && !commands.contains(&Command::PickGray)
+            && ctx.input(|input| {
+                input.pointer.button_clicked(egui::PointerButton::Primary)
+                    && input.pointer.interact_pos().is_some_and(|pos| {
+                        !current_rect.contains(pos)
+                            && !halves.is_some_and(|(held_rect, _)| held_rect.contains(pos))
+                    })
+            })
+        {
+            self.exposure.pick_event(PickEvent::OutsideClick);
+        }
+        let current_pick =
+            self.exposure
+                .pick_at_click(&self.core, &response, frame.white_balance.pick);
+        let held_pick = held_area.as_ref().map(|(pick, response, _)| {
+            self.exposure
+                .pick_at_click(&self.second_core, response, *pick)
+        });
+        paint_pick_line(
+            ui,
+            current_rect,
+            line_bottom,
+            self.exposure.picking,
+            current_pick,
+        );
+        if let (Some((_, held, bottom)), Some(pick)) = (&held_area, held_pick) {
+            paint_pick_line(ui, held.rect, *bottom, self.exposure.picking, pick);
         }
         self.last_exposure_steps = frame.exposure.steps;
         self.last_zoom = Some((frame.zoom, frame.scale));
@@ -10705,6 +10880,7 @@ impl Loupe {
 struct ImageAreaShown<'a> {
     /// Zooming goes around the pointer (otherwise around the view's centre).
     anchor_at_pointer: bool,
+    picking: bool,
     /// The clipping overlays that are on.
     choice: ClipChoice,
     /// The focus marking is on (T168).
@@ -10752,10 +10928,14 @@ fn zoom_anchor(
         return None;
     }
     let p = pointer.filter(|p| rect.contains(*p))?;
-    Some([
-        f64::from((p.x - rect.min.x) * ppp),
-        f64::from((p.y - rect.min.y) * ppp),
-    ])
+    Some(pointer_in_view(p, rect, ppp))
+}
+
+fn pointer_in_view(pos: egui::Pos2, rect: egui::Rect, ppp: f32) -> [f64; 2] {
+    [
+        f64::from((pos.x - rect.min.x) * ppp),
+        f64::from((pos.y - rect.min.y) * ppp),
+    ]
 }
 
 /// Draws one view core's image area into `rect` (ADR 0017 §2.2, U6, T152): the mouse
@@ -10763,8 +10943,8 @@ fn zoom_anchor(
 /// `mouse_core` (the same core, or the current side's while the compare is locked, T154), the
 /// sync of the core's `textures`, the frame asked of the core, the image, the focus marking from
 /// `focus_overlay` and over it the clipping marks from `clip_overlay`, the rating badge, and the error, indicator and empty-area texts. The
-/// background is the caller's. Returns the core's frame and the area's response, to which the
-/// caller attaches the right-click menu (ADR 0019 §2.9, T221).
+/// background is the caller's. Returns the core's frame, the area's response and the space
+/// available above the marks and rating badge for the gray pick line.
 #[allow(clippy::too_many_arguments)] // one core's area, the core its mouse acts on, its state
 fn draw_image_area(
     ui: &egui::Ui,
@@ -10776,10 +10956,13 @@ fn draw_image_area(
     rect: egui::Rect,
     id: egui::Id,
     shown: &ImageAreaShown<'_>,
-) -> (Frame, egui::Response) {
+) -> (Frame, egui::Response, f32) {
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    if shown.picking && response.contains_pointer() {
+        ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
     let pointer = response.hover_pos();
     let anchor = zoom_anchor(shown.anchor_at_pointer, pointer, rect, ppp);
     // mouse: double-click = Z, drag = pan, wheel = zoom
@@ -10861,6 +11044,7 @@ fn draw_image_area(
     // The row of adjustment marks at the bottom right (ADR 0027 §2.1, W2-Q5, T314; W3-Q6,
     // T318), from this frame's state, only while an image is drawn; the rating badge is at the
     // bottom left.
+    let mut line_bottom = rect.max.y;
     if frame.draw.is_some() {
         let marks = adjustment_marks(
             &frame.fine,
@@ -10873,7 +11057,9 @@ fn draw_image_area(
             (&frame.white_balance, shown.wb_key),
             (&frame.channel, shown.channel, shown.channel_key),
         );
-        paint_adjustment_marks(&painter, rect, &marks, &response);
+        if let Some(top) = paint_adjustment_marks(&painter, rect, &marks, &response) {
+            line_bottom = top;
+        }
     }
     // The rating badge is always shown (T110).
     if let Some(rating) = frame
@@ -10882,7 +11068,7 @@ fn draw_image_area(
         .and_then(|path| shown.metadata.shown_rating(path))
         && (rating.stars.is_some() || rating.label.is_some())
     {
-        paint_rating_badge(&painter, rect, rating);
+        line_bottom = line_bottom.min(paint_rating_badge(&painter, rect, rating));
     }
     let centre_text = |text: &str| {
         painter.text(
@@ -10912,7 +11098,7 @@ fn draw_image_area(
         },
         Status::Ready => {}
     }
-    (frame, response)
+    (frame, response, line_bottom)
 }
 
 /// The line at the top of one side of the compare (U6-Q10, T153): `text` centred at the top of
@@ -10957,7 +11143,7 @@ fn paint_adjustment_marks(
     rect: egui::Rect,
     marks: &[AdjustmentMark],
     response: &egui::Response,
-) {
+) -> Option<f32> {
     let wrap = (rect.width() - 4.0 * SIDE_TEXT_MARGIN).max(0.0);
     let laid: Vec<_> = marks
         .iter()
@@ -10976,13 +11162,10 @@ fn paint_adjustment_marks(
             (mark, galley, colour)
         })
         .collect();
-    let Some(height) = laid
+    let height = laid
         .iter()
         .map(|(_, galley, _)| galley.size().y)
-        .reduce(f32::max)
-    else {
-        return;
-    };
+        .reduce(f32::max)?;
     let gaps = laid.len().saturating_sub(1) as f32 * SIDE_TEXT_MARGIN;
     let width = laid
         .iter()
@@ -11020,6 +11203,34 @@ fn paint_adjustment_marks(
             ui.label(mark.hover.as_str());
         });
     }
+    Some(plate.min.y)
+}
+
+fn paint_pick_line(ui: &egui::Ui, rect: egui::Rect, bottom: f32, picking: bool, pick: PickState) {
+    let Some(text) = pick_line(picking, pick) else {
+        return;
+    };
+    let painter = ui.painter_at(rect);
+    let galley = painter.layout(
+        text,
+        egui::FontId::proportional(STATUS_TEXT_SIZE),
+        image_area::TEXT,
+        (rect.width() - 4.0 * SIDE_TEXT_MARGIN).max(0.0),
+    );
+    let size = galley.size() + egui::vec2(2.0 * SIDE_TEXT_MARGIN, SIDE_TEXT_MARGIN);
+    let plate = egui::Rect::from_min_size(
+        egui::pos2(
+            rect.center().x - size.x / 2.0,
+            bottom - SIDE_TEXT_MARGIN - size.y,
+        ),
+        size,
+    );
+    painter.rect_filled(plate, 3.0, SIDE_TEXT_PLATE);
+    painter.galley(
+        plate.min + egui::vec2(SIDE_TEXT_MARGIN, SIDE_TEXT_MARGIN / 2.0),
+        galley,
+        image_area::TEXT,
+    );
 }
 
 /// The range from the smallest to the largest file index (+1), for the thumbnail worker's
@@ -13501,7 +13712,7 @@ fn paint_rating_glyphs(
     x - origin.x
 }
 
-fn paint_rating_badge(painter: &egui::Painter, image_rect: egui::Rect, rating: &Rating) {
+fn paint_rating_badge(painter: &egui::Painter, image_rect: egui::Rect, rating: &Rating) -> f32 {
     let glyphs = star_glyphs(rating.stars);
     let text_color = if rating.label.as_deref().and_then(label_color).is_some() {
         LABEL_TEXT
@@ -13548,6 +13759,7 @@ fn paint_rating_badge(painter: &egui::Painter, image_rect: egui::Rect, rating: &
         );
         painter.galley(position, galley, text_color);
     }
+    badge.min.y
 }
 
 /// Opens the Windows folder dialog. It starts in the folder already typed in the field, else in
@@ -15212,12 +15424,112 @@ mod tests {
     }
 
     mod preview_exposure {
-        use super::super::{PreviewExposure, exposure_buttons, wb_checked, wb_on, wb_to_send};
-        use pw_loupe::{Command, KeyChord};
+        use pw_loupe::{Action, Command, KeyChord, ViewMode};
         use pw_viewcore::{
             AdjustState, Channel, Config, ExposureMode, ViewCore, Wb, WbMode, WbPreset,
             WhiteBalanceState, native::NativeBackend,
         };
+
+        use super::super::{
+            PickEvent, PreviewExposure, command_available_in_view, exposure_buttons, pick_ends,
+            pointer_in_view, wb_checked, wb_on, wb_to_send,
+        };
+
+        #[test]
+        fn pick_gray_toggles_only_on_a_fresh_key_or_menu_click_when_available() {
+            let mut state = PreviewExposure::default();
+            state.toggle_pick(false, false);
+            state.toggle_pick(true, true);
+            assert!(!state.picking);
+            state.toggle_pick(false, true);
+            assert!(state.picking);
+            state.toggle_pick(true, true);
+            state.toggle_pick(false, false);
+            assert!(state.picking);
+            state.toggle_pick(false, true);
+            assert!(!state.picking);
+        }
+
+        #[test]
+        fn pick_gray_ends_on_view_changes_and_either_kind_of_click() {
+            for event in [
+                PickEvent::Escape,
+                PickEvent::ImageChanged,
+                PickEvent::LeftPreview,
+                PickEvent::FrameCanPick(false),
+                PickEvent::OutsideClick,
+                PickEvent::ImageClick,
+            ] {
+                assert!(pick_ends(true, event));
+            }
+            for action in [
+                Action::Fit,
+                Action::ToggleZoom,
+                Action::ZoomStep(1),
+                Action::ZoomStep(-1),
+                Action::ToggleMode,
+                Action::ToggleAnchor,
+                Action::ToggleInfo,
+            ] {
+                assert!(pick_ends(true, PickEvent::ViewAction(action)), "{action:?}");
+            }
+            for command in [
+                Command::WhiteBalanceShot,
+                Command::AutoWhiteBalance,
+                Command::WhiteBalanceDaylight,
+                Command::WhiteBalancePreset(0),
+                Command::FineDetails,
+                Command::Sharpening,
+                Command::Shadows,
+                Command::ExposureBrighter,
+                Command::ExposureDarker,
+                Command::ResetExposure,
+                Command::AutoExposure,
+                Command::CameraBrightness,
+                Command::NextChannel,
+                Command::PreviousChannel,
+                Command::Channel(Channel::Red),
+                Command::ResetAdjustments,
+                Command::ClipHighlights,
+                Command::ClipShadows,
+                Command::FocusMarking,
+                Command::Compare,
+                Command::HoldImage,
+                Command::SwapImages,
+                Command::AboveBelow,
+                Command::LockZoom,
+                Command::ToggleColumns,
+                Command::LeftColumn,
+                Command::RotateLeft,
+                Command::RotateRight,
+            ] {
+                assert!(pick_ends(true, PickEvent::Command(command)), "{command:?}");
+            }
+            assert!(!pick_ends(false, PickEvent::Escape));
+            assert!(!pick_ends(true, PickEvent::FrameCanPick(true)));
+            assert!(!pick_ends(true, PickEvent::Command(Command::PickGray)));
+            assert!(!pick_ends(true, PickEvent::Command(Command::Metadata)));
+        }
+
+        #[test]
+        fn pick_gray_uses_physical_pixels_relative_to_the_side_clicked() {
+            let rect = egui::Rect::from_min_size(egui::pos2(80.0, 40.0), egui::vec2(200.0, 180.0));
+            let pos = egui::pos2(96.0, 70.0);
+            assert_eq!(pointer_in_view(pos, rect, 1.0), [16.0, 30.0]);
+            assert_eq!(pointer_in_view(pos, rect, 1.5), [24.0, 45.0]);
+        }
+
+        #[test]
+        fn pick_gray_is_enabled_only_for_a_preview_that_can_measure() {
+            for view in [None, Some(ViewMode::Grid), Some(ViewMode::Loupe)] {
+                for can_pick in [false, true] {
+                    assert_eq!(
+                        command_available_in_view(Command::PickGray, view, can_pick),
+                        view == Some(ViewMode::Loupe) && can_pick
+                    );
+                }
+            }
+        }
         use std::path::PathBuf;
 
         mod jpeg_fixture {
@@ -15485,6 +15797,7 @@ mod tests {
                 Command::WhiteBalanceShot,
                 Command::AutoWhiteBalance,
                 Command::WhiteBalanceDaylight,
+                Command::PickGray,
                 Command::WhiteBalancePreset(0),
                 Command::WhiteBalancePreset(1),
                 Command::WhiteBalancePreset(95),
@@ -15493,7 +15806,7 @@ mod tests {
                 (WbMode::Shot, Some(Command::WhiteBalanceShot)),
                 (WbMode::Auto, Some(Command::AutoWhiteBalance)),
                 (WbMode::Daylight, Some(Command::WhiteBalanceDaylight)),
-                (WbMode::Grey, None),
+                (WbMode::Grey, Some(Command::PickGray)),
                 (
                     WbMode::Preset("Shade".to_owned()),
                     Some(Command::WhiteBalancePreset(1)),
@@ -15552,9 +15865,11 @@ mod tests {
             let mut state = PreviewExposure::default();
             state.toggle_mode(ExposureMode::Camera, false);
             state.toggle_shadows(false);
+            state.toggle_pick(false, true);
             state.reset([&current, &held]);
             assert_eq!(state.exposure_mode, ExposureMode::Off);
             assert!(!state.shadows);
+            assert!(!state.picking);
             for core in [&current, &held] {
                 assert_eq!(core.frame([1, 1]).exposure.steps, 0);
             }

@@ -647,6 +647,7 @@ pub fn command_text(command: Command) -> String {
         Command::WhiteBalanceShot => "As Shot".to_owned(),
         Command::AutoWhiteBalance => "Auto White Balance".to_owned(),
         Command::WhiteBalanceDaylight => "Daylight (LibRaw)".to_owned(),
+        Command::PickGray => "Pick Gray".to_owned(),
         // The preset menu draws the name from the file.
         Command::WhiteBalancePreset(_) => "White balance preset".to_owned(),
         Command::Channel(channel) => match channel {
@@ -861,6 +862,7 @@ mod tests {
                 "As Shot",
                 "Auto White Balance",
                 "Daylight (LibRaw)",
+                "Pick Gray",
                 "Next Channel",
                 "Previous Channel",
                 "Color",
@@ -948,6 +950,7 @@ mod tests {
             None,
             Some("W"),
             None,
+            Some("Shift+W"),
             Some("N"),
             Some("Shift+N"),
             None,

@@ -13,8 +13,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 - White balance in the preview for RAW files: W turns auto white balance on and off, and View ▸
   White Balance, also in the preview's right-click menu, chooses As Shot, Auto White Balance,
-  Daylight (LibRaw) or one of the file's own presets. A mark in the preview shows the choice, and
-  the histogram and overlays stay as shot. Reset Adjustments (Backspace) returns to As Shot.
+  Daylight (LibRaw) or one of the file's own presets. Pick Gray (Shift+W, or the same menus) sets
+  the balance for the current image from one click on a neutral gray area. A mark in the preview
+  shows the choice, and the histogram and overlays stay as shot. Reset Adjustments (Backspace)
+  returns to As Shot.
 
 ## [0.8.0] - 2026-11-27
 

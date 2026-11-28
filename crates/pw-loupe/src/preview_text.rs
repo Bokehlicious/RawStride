@@ -8,11 +8,30 @@
 
 use pw_viewcore::{
     AdjustState, Channel, ClippingState, Ev, ExposureBase, ExposureMode, ExposureState, FinePause,
-    FineState, SharpenState, Sharpening, Wb, WbBase, WhiteBalanceState, Zoom,
+    FineState, PickState, SharpenState, Sharpening, Wb, WbBase, WhiteBalanceState, Zoom,
 };
 
 use crate::shell::KeyChord;
 use crate::shell_text::key_text;
+
+/// The instruction or measurement status shown in an image area.
+pub fn pick_line(picking: bool, pick: PickState) -> Option<String> {
+    Some(
+        if picking {
+            "Click on a neutral gray area. Esc cancels."
+        } else {
+            match pick {
+                PickState::Idle => return None,
+                PickState::Measuring => "Measuring gray.",
+                PickState::TooBrightOrDark => {
+                    "That area is too bright or too dark to measure gray."
+                }
+                PickState::Unusable => "Pick Gray needs a RAW file shown in RAW mode.",
+            }
+        }
+        .to_owned(),
+    )
+}
 
 /// A fixed text of the preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1932,6 +1951,35 @@ mod tests {
             for state in [AdjustState::Waiting, AdjustState::Paused] {
                 assert_eq!(marks_for(state, Channel::Color, key), expected);
             }
+        }
+    }
+
+    #[test]
+    fn pick_gray_shows_the_instruction_or_the_measurement_status_without_a_shortcut_label() {
+        assert_eq!(pick_line(false, PickState::Idle), None);
+        for (state, message) in [
+            (PickState::Measuring, "Measuring gray."),
+            (
+                PickState::TooBrightOrDark,
+                "That area is too bright or too dark to measure gray.",
+            ),
+            (
+                PickState::Unusable,
+                "Pick Gray needs a RAW file shown in RAW mode.",
+            ),
+        ] {
+            assert_eq!(pick_line(false, state).as_deref(), Some(message));
+        }
+        for state in [
+            PickState::Idle,
+            PickState::Measuring,
+            PickState::TooBrightOrDark,
+            PickState::Unusable,
+        ] {
+            assert_eq!(
+                pick_line(true, state).as_deref(),
+                Some("Click on a neutral gray area. Esc cancels.")
+            );
         }
     }
 }

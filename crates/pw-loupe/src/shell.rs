@@ -821,6 +821,8 @@ pub enum Command {
     AutoWhiteBalance,
     /// Use LibRaw's daylight multipliers (View ▸ White Balance).
     WhiteBalanceDaylight,
+    /// Measure white balance from a neutral gray area (Shift+W).
+    PickGray,
     /// Select the file's white balance preset at this position.
     WhiteBalancePreset(u8),
     /// Select a channel view for the session (View ▸ Channel; ADR 0027 W4).
@@ -907,6 +909,7 @@ impl Command {
             | Self::WhiteBalanceShot
             | Self::AutoWhiteBalance
             | Self::WhiteBalanceDaylight
+            | Self::PickGray
             | Self::WhiteBalancePreset(_)
             | Self::Channel(_)
             | Self::ResetAdjustments
@@ -1072,6 +1075,10 @@ const WHITE_BALANCE_ITEMS: &[MenuItem] = &[
     MenuItem {
         command: Command::WhiteBalanceDaylight,
         key: None,
+    },
+    MenuItem {
+        command: Command::PickGray,
+        key: shift(Key::W),
     },
 ];
 
@@ -2513,6 +2520,10 @@ mod tests {
                     command: Command::WhiteBalanceDaylight,
                     key: None
                 },
+                MenuItem {
+                    command: Command::PickGray,
+                    key: shift(Key::W),
+                },
             ],
         );
         let key_map = KeyMap::default();
@@ -2524,7 +2535,11 @@ mod tests {
             assert_eq!(menu_key(item, &key_map), item.key);
             assert_eq!(
                 KeyAction::of_command(item.command),
-                (item.command == Command::AutoWhiteBalance).then_some(KeyAction::AutoWhiteBalance)
+                match item.command {
+                    Command::AutoWhiteBalance => Some(KeyAction::AutoWhiteBalance),
+                    Command::PickGray => Some(KeyAction::PickGray),
+                    _ => None,
+                }
             );
         }
     }

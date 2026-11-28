@@ -1,4 +1,4 @@
-# T353. ADR 0027 W6: Pick Gray — the key, the menu item, the pick mode and its click — Open
+# T353. ADR 0027 W6: Pick Gray — the key, the menu item, the pick mode and its click — Done
 
 - **Why:** ADR 0027 §3.5 and W6-Q2, W6-Q6, W6-Q8 (answered by the owner 2026-11-28, ADR 0027
   §4.6). T352 gave the view core the click on gray (`ViewCore::pick_grey(point, view_px) ->
@@ -130,3 +130,5 @@
 |---|---|---|
 | 2026-11-28 | Blocked | Added (from the cold reads and the chain review of T350 and T351); waits for T351 and T352 |
 | 2026-11-28 | Open | T352 done; set to Open by the reviewer (the cold read and the chain review are above) |
+| 2026-11-28 | Ready for review | Implemented Pick Gray for the preview and both compare sides. Added six tests and extended existing coverage. Workspace checks passed. The owner's W6 hand check and fit latency measurements follow. |
+| 2026-11-28 | Done | Reviewed: points 1–7 and the tests asked for are there; the diff is only the files above. The pick uses each side's own core, Esc ends the mode before it closes the compare, the line sits above the marks' plate and the rating badge, and a click on the Pick Gray menu item is not taken as a click outside. Beyond the list of point 3, Zoom at Pointer and the info toggle also end the mode (harmless); the mouse wheel and a pan do not (not in the list). The reviewer added the total to `docs/test-inventory.md` (2946). Done: the change log line for the whole white balance, `known-limits.md` items of W6-Q5 and W6-Q1 ("The white balance (ADR 0027 W6)"); the backlog sort follows the owner's hand check. `check.ps1` all OK, 2946 passed, 112 ignored, no clippy warnings. |

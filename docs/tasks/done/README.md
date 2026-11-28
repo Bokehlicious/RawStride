@@ -360,3 +360,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T350](T350-white-balance-in-the-state.md) | ADR 0027 W6: the white balance's mode in the view core's state (pw-viewcore) |
 | [T351](T351-white-balance-keys-menu-marks.md) | ADR 0027 W6: the key, the menu and the mark of the white balance (pw-loupe) |
 | [T352](T352-click-on-gray-in-the-state.md) | ADR 0027 W6: the click on gray in the view core's state (pw-viewcore) |
+| [T353](T353-pick-gray-keys-and-mode.md) | ADR 0027 W6: Pick Gray, the key, the menu item, the pick mode and its click (pw-loupe) |

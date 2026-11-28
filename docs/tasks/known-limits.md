@@ -637,6 +637,15 @@ only if it is seen in use.)
 - *A grey note kept by As Shot* (T352): after a click that was too bright or too dark, choosing
   As Shot while the mode is already As Shot changes nothing, so the note stays until the next
   click, another white balance, Reset Adjustments, the display mode or another image.
+- *The measurements stay as shot* (W6-Q5): the RAW histogram, the exposure statistics, the
+  clipping overlay and the focus marking use the camera's balance, so with another balance the
+  overlay can mark a channel clipped that the view no longer shows clipped, or the other way
+  round. The mark's hover text says so.
+- *Auto exposure is not worked out again* (W6-Q5): its value comes from the unadjusted histogram,
+  so a balance that lifts one colour can move the brightness a little.
+- *Auto white balance is the grey-world rule* (W6-Q1): a picture dominated by one colour (a green
+  forest, a sunset) gets a cast of the other kind; Pick Gray and the file's presets are the
+  answer, and the hover text says what the rule is.
 
 ## Filter on text and metadata (ADR 0022)
 
