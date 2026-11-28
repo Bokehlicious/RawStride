@@ -1,4 +1,4 @@
-# T348. ADR 0027 W6: the white balance per LibRaw render, the means under a RAW area and the file's presets — Blocked
+# T348. ADR 0027 W6: the white balance per LibRaw render, the means under a RAW area and the file's presets — Open
 
 - **Why:** ADR 0027 §3.5 and W6-Q1–W6-Q4 and W6-Q7 (answered by the owner 2026-11-28, ADR 0027
   §4.6). The white balance is applied in LibRaw as `user_mul`, passed **with each render** and
@@ -246,3 +246,4 @@
 |---|---|---|
 | 2026-11-28 | Blocked | Added; waits for the cold read and the chain review |
 | 2026-11-28 | Blocked | Cold read and chain review: `use_camera_wb` off (and `use_camera_matrix` 3) for a balanced render, since LibRaw copies the camera's multipliers over `user_mul`; the daylight fallback worked out from `cam_xyz` × dcraw's sRGB/D65 matrix (`rgb_cam`'s rows each sum to 1); the means judge whole cells as the clipping map does; the FFI of the presets and the diagnostics named; the shim times its own preset read (no environment variable); the 96-preset limit and G2 not checked; the daylight test within 15 %; `PM-raw.ARW` opened by its path; exact counts for a 12 × 12 area; `can_measure`; the statistics' time beside the means; the line numbers; the baseline `latency.ps1` is the reviewer's, before this task |
+| 2026-11-28 | Open | Set to Open by the reviewer after the owner's approval of the chain T348–T353; T349–T353 wait in turn. The reviewer records the baseline `latency.ps1` (every adjustment off) before an agent starts this task |
