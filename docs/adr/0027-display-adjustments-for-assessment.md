@@ -11,7 +11,7 @@
   check"). W5's W5-Q1–W5-Q9 answered by the owner on 2026-11-25, all as proposed (§4.4); they
   change §3.4's range to −2 to +3 EV and make the shadows a display mode for the session. W4's
 questions (§4.5) were answered on 2026-11-26 and W6's W6-Q1–W6-Q8 on 2026-11-28, all as proposed
-(§4.6).
+(§4.6); W6 hand-checked and approved by the owner on 2026-11-28 with no change (§4.6).
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -847,6 +847,25 @@ that was not prefetched, with auto white balance on, then waits for the means be
 view, as W6-Q7 proposed. **After T354 (2026-11-28, same machine and runs):** the means take 173–175 ms
 on the A7R IV's ARW, 211–213 ms on the A1's and 72–77 ms on the RAF (about the statistics' time), and
 the step with auto white balance 654–667, 806–815 and 510–519 ms, with the same results as T348's.
+
+**W6's hand check (owner, 2026-11-28, the build of T353):** approved as built, with no change:
+auto (W), the presets, "Daylight (LibRaw)", Pick Gray (Shift+W) and its edge cases, Backspace,
+the paused mark, the compare and the unchanged measurements were checked. So W6-Q6 stands (no
+buttons and no setting "Auto white balance at start"), and the wait of W6-Q7 for an image that
+was not prefetched is accepted. Seen, not a fault: the View menu's White Balance submenu does
+little, since the preview has no menu bar and the contact sheet does not use the balance; it is
+taken up with Exposure and Channel in the right-click menu (backlog), which was not decided at
+the hand check.
+
+`latency.ps1` (owner, 2026-11-28, release build of 5726305, `s6\a1`, at fit, 13 steps × 2.5 s,
+steps 2–13 compared, as for the baseline before T348): every step seen and settled at its first
+change. The next image's first change, median (range), **6.05 ms (5.5–8.8) with every adjustment
+off**, the same as the baseline's 6.05 ms (5.2–9.2), so reading the presets at the open costs
+nothing measurable and they stay read there (§4.6, "Cost with everything off"); **6.05 ms
+(5.9–6.4) with auto white balance on**. Memory after 13 steps 2.4–2.5 GB. V1 and V4 met. A series
+on the key W showed only its first press (61.5 ms to the first change, 114 ms settled) and no
+change or work in the program after it; taken as the measurement's, not the program's (the owner
+saw W work by hand), as for W5's Ctrl+↑, and not measured again (owner). **W6 is done.**
 
 ## 5. Steps
 

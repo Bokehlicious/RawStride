@@ -16,8 +16,11 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 - **Exposure and Channel in the preview's right-click menu** (owner, 2026-11-28, at T351; ADR
   0027 §4.6 "Where the menu is reached"): the preview has no menu bar (ADR 0017 U3-Q1), so the
   View menu's submenus Exposure and Channel cannot be reached where they act; every item has a
-  key, so only White Balance went into the right-click menu (T351). Asked at W6's hand check
-  whether Exposure and Channel join it.
+  key, so only White Balance went into the right-click menu (T351). Not decided at W6's hand
+  check (2026-11-28), where the owner also saw that the View menu's White Balance submenu does
+  little: the preview has no menu bar and the contact sheet does not use the balance. One
+  question for the three submenus: leave the menus as they are, grey the submenus in the View
+  menu when no preview is open, or take them out of the View menu.
 - **The camera's brightness worked out from the embedded JPEG** (W5's hand check, 2026-11-26;
   ADR 0027 §4.4): the file's own value (DNG `BaselineExposure`, the Fujifilm value) exists only
   in some formats and matches the camera's JPEG only roughly. An offset worked out by comparing

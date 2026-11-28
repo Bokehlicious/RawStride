@@ -626,6 +626,8 @@ only if it is seen in use.)
 
 ## The white balance (ADR 0027 W6)
 
+(T348–T353, accepted by the owner at W6's hand check, 2026-11-28.)
+
 - *A `keys.txt` line on W* (T351): a `keys.txt` that binds W to another action acting in the
   preview loses that line on loading (the key map's rule, as for N, O, B and U).
 - *As Shot sent again each frame outside the preview* (T351): the shell decides what to send from
